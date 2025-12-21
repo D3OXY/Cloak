@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.0] - 2024-12-22
+
+### Added
+- **Picture-in-Picture (PiP) window**: Floating preview window to see what's being shared
+  - Resizable and freely moveable
+  - Hidden from screen capture (only you can see it)
+  - Shows live preview including privacy mode effects
+- **Toggle PiP hotkey**: New configurable hotkey to show/hide PiP window
+- **HUD preview thumbnail**: Privacy toggle HUD now shows a small preview of what viewers see
+
+### Changed
+- **HUD duration**: Privacy toggle HUD now displays for 2 seconds (was 1.5 seconds)
+- **Larger HUD**: HUD resized to accommodate preview thumbnail (220x100)
+
+### Technical
+- Added `PiPWindow` class with NSWindow styling for floating, resizable preview
+- Extended `ScreenCaptureEngineDelegate` with `didReceiveFrame` for real-time PiP updates
+- PiP window automatically excluded from self-capture when self-hiding is enabled
+
 ## [1.3.4] - 2024-12-21
 
 ### Changed
@@ -120,6 +139,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| 1.4.0 | 2024-12-22 | Picture-in-Picture preview, PiP hotkey, HUD preview thumbnail |
 | 1.3.4 | 2024-12-21 | Instant app hiding, event-driven detection, zero idle CPU |
 | 1.3.3 | 2024-12-21 | HUD above fullscreen, green menu icon, faster hotkeys |
 | 1.3.2 | 2024-12-21 | Dynamic aspect ratio, smart visibility (hidden until sharing) |
