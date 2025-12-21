@@ -41,17 +41,30 @@ Cloak is a macOS app that creates a shareable window for video calls. Instead of
 
 1. **Launch Cloak** - The app opens with a start screen
 2. **Configure Privacy Mode** - Choose Blur, Image, or Black screen
-3. **Click "Start Sharing"** - Cloak begins mirroring your screen
-4. **Share in Video Call** - In Zoom/Meet/Teams, share the "Cloak" window (not your screen)
-5. **Toggle Privacy** - Press `Cmd+Option+H` anytime to toggle privacy mode
+3. **Set Your Hotkeys** - Configure keyboard shortcuts for quick access
+4. **Click "Start Sharing"** - Cloak begins mirroring your screen
+5. **Share in Video Call** - In Zoom/Meet/Teams, share the "Cloak" window (not your screen)
+6. **Toggle Privacy** - Use your configured hotkey or hover controls
 
 ### Keyboard Shortcuts
 
-| Shortcut | Action |
-|----------|--------|
-| `Cmd+Option+H` | Toggle privacy mode (works globally) |
-| `Cmd+F` | Toggle fullscreen |
-| `Cmd+Q` | Quit Cloak |
+Cloak has no default hotkeys - you configure your own! On the start screen, you'll see:
+
+| Action | Description |
+|--------|-------------|
+| Toggle Privacy | Show/hide your screen |
+| Start/Stop Sharing | Begin or end screen capture |
+| Toggle Fullscreen | Enter/exit fullscreen mode |
+
+**To set a hotkey:**
+1. Click the "Click to set" button next to the action
+2. Press your desired key combination (must include a modifier like Cmd, Option, Ctrl, or Shift)
+3. The hotkey is saved and works globally (even when Cloak is in the background)
+
+**To clear a hotkey:**
+Click the "✕" button next to the hotkey.
+
+All hotkeys persist between app restarts.
 
 ### Privacy Modes
 
