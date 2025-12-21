@@ -1867,8 +1867,11 @@ class HUDWindow: NSWindow {
         visualEffectView.layer?.cornerRadius = 20
         visualEffectView.layer?.masksToBounds = true
 
-        // Preview thumbnail (16:10 aspect ratio, small)
-        previewImageView.frame = NSRect(x: 14, y: 14, width: 80, height: 50)
+        // Preview thumbnail (16:10 aspect ratio, centered vertically on left)
+        let previewHeight: CGFloat = 56
+        let previewWidth: CGFloat = 90  // ~16:10 ratio
+        let previewY = (100 - previewHeight) / 2
+        previewImageView.frame = NSRect(x: 14, y: previewY, width: previewWidth, height: previewHeight)
         previewImageView.imageScaling = .scaleProportionallyUpOrDown
         previewImageView.wantsLayer = true
         previewImageView.layer?.cornerRadius = 8
@@ -1877,19 +1880,24 @@ class HUDWindow: NSWindow {
         previewImageView.layer?.borderColor = NSColor.white.withAlphaComponent(0.2).cgColor
         visualEffectView.addSubview(previewImageView)
 
-        // Icon
-        iconView.frame = NSRect(x: 104, y: 50, width: 26, height: 26)
+        // Right side container for icon + label (centered vertically)
+        let rightX: CGFloat = 114
+        let groupHeight: CGFloat = 50
+        let groupY = (100 - groupHeight) / 2
+
+        // Icon (centered in group)
+        iconView.frame = NSRect(x: rightX + 20, y: groupY + 24, width: 24, height: 24)
         iconView.imageScaling = .scaleProportionallyUpOrDown
         visualEffectView.addSubview(iconView)
 
-        // Label
-        label.frame = NSRect(x: 134, y: 50, width: 80, height: 26)
+        // Label (below icon, centered)
+        label.frame = NSRect(x: rightX, y: groupY, width: 92, height: 22)
         label.isEditable = false
         label.isBordered = false
         label.backgroundColor = .clear
         label.textColor = .labelColor
-        label.alignment = .left
-        label.font = NSFont.systemFont(ofSize: 14, weight: .medium)
+        label.alignment = .center
+        label.font = NSFont.systemFont(ofSize: 13, weight: .semibold)
         visualEffectView.addSubview(label)
 
         contentView = visualEffectView
@@ -1999,10 +2007,10 @@ class PiPWindow: NSWindow {
         self.titlebarAppearsTransparent = true
         self.titleVisibility = .hidden
         self.isMovableByWindowBackground = true
-        self.level = .floating  // Float above other windows
+        self.level = .screenSaver  // Show above fullscreen apps
         self.isOpaque = false
         self.backgroundColor = NSColor.black.withAlphaComponent(0.9)
-        self.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        self.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
         self.sharingType = .none  // Hide from all screen capture
         self.minSize = NSSize(width: 160, height: 100)
         self.aspectRatio = NSSize(width: 16, height: 10)  // Lock aspect ratio
