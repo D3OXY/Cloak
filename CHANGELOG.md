@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0] - 2024-12-21
+
+### Added
+- **Real-time blur**: Privacy blur now shows live blurred preview instead of static image
+- **Blur intensity slider**: Adjustable blur intensity from 5 to 100
+- **Liquid glass HUD**: Updated HUD design with macOS native vibrancy effect
+
+### Changed
+- **HUD position**: Moved from top center to bottom center of screen
+- **Window hiding**: Cloak window and HUD now use `sharingType = .none` for reliable hiding
+
+### Fixed
+- **HUD visibility**: HUD no longer appears in screen capture
+- **App exclusion refresh**: Excluded apps now stay hidden even after being reopened (2-second auto-refresh)
+
 ## [1.1.0] - 2024-12-21
 
 ### Added
@@ -48,5 +63,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| 1.2.0 | 2024-12-21 | Real-time blur, blur intensity slider, liquid glass HUD |
 | 1.1.0 | 2024-12-21 | App exclusion, self-hiding window, documentation |
 | 1.0.0 | 2024-12-21 | Initial release with privacy toggle, hotkeys, fullscreen |

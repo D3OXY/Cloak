@@ -91,6 +91,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         window.minSize = NSSize(width: 800, height: 500)
         window.isReleasedWhenClosed = false
         window.collectionBehavior = [.fullScreenPrimary]
+        window.sharingType = .none  // Hide from all screen capture
 
         mainView = MainView(frame: windowRect)
         mainView.delegate = self
@@ -135,8 +136,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             windowsToExclude.append(hud)
         }
 
-        // Get excluded apps from settings
+        // Get settings from start screen
         let excludedApps = mainView.startScreenView.getExcludedApps()
+        let blurIntensity = mainView.startScreenView.getBlurIntensity()
+
+        // Set blur intensity on preview view
+        mainView.previewView.blurIntensity = blurIntensity
 
         captureEngine = ScreenCaptureEngine(previewView: mainView.previewView, excludingWindows: windowsToExclude, excludingApps: excludedApps)
         captureEngine?.delegate = self
@@ -599,6 +604,11 @@ class StartScreenView: NSView {
     private var recordingAction: HotkeyAction?
     private var globalMonitor: Any?
 
+    // Blur intensity
+    private var blurIntensity: Double = 50.0
+    private var blurSlider: NSSlider!
+    private var blurValueLabel: NSTextField!
+
     // Excluded apps
     private var excludedApps: [String] = []
     private var excludedAppsStack: NSStackView!
@@ -631,6 +641,11 @@ class StartScreenView: NSView {
             imageWell.image = image
         }
 
+        // Load blur intensity
+        if UserDefaults.standard.object(forKey: "blurIntensity") != nil {
+            blurIntensity = UserDefaults.standard.double(forKey: "blurIntensity")
+        }
+
         // Load excluded apps
         if let apps = UserDefaults.standard.stringArray(forKey: "excludedApps") {
             excludedApps = apps
@@ -639,6 +654,10 @@ class StartScreenView: NSView {
 
     func getExcludedApps() -> [String] {
         return excludedApps
+    }
+
+    func getBlurIntensity() -> Double {
+        return blurIntensity
     }
 
     private func saveExcludedApps() {
@@ -699,6 +718,41 @@ class StartScreenView: NSView {
         modeSegmented.target = self
         modeSegmented.action = #selector(modeChanged)
         contentStack.addArrangedSubview(modeSegmented)
+
+        // Blur intensity slider
+        let blurRow = NSView()
+        blurRow.translatesAutoresizingMaskIntoConstraints = false
+
+        let blurLabel = NSTextField(labelWithString: "Blur Intensity")
+        blurLabel.font = NSFont.systemFont(ofSize: 12)
+        blurLabel.textColor = .secondaryLabelColor
+        blurLabel.translatesAutoresizingMaskIntoConstraints = false
+        blurRow.addSubview(blurLabel)
+
+        blurSlider = NSSlider(value: blurIntensity, minValue: 5, maxValue: 100, target: self, action: #selector(blurSliderChanged))
+        blurSlider.translatesAutoresizingMaskIntoConstraints = false
+        blurRow.addSubview(blurSlider)
+
+        blurValueLabel = NSTextField(labelWithString: "\(Int(blurIntensity))")
+        blurValueLabel.font = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .regular)
+        blurValueLabel.textColor = .secondaryLabelColor
+        blurValueLabel.alignment = .right
+        blurValueLabel.translatesAutoresizingMaskIntoConstraints = false
+        blurRow.addSubview(blurValueLabel)
+
+        NSLayoutConstraint.activate([
+            blurRow.heightAnchor.constraint(equalToConstant: 24),
+            blurLabel.leadingAnchor.constraint(equalTo: blurRow.leadingAnchor),
+            blurLabel.centerYAnchor.constraint(equalTo: blurRow.centerYAnchor),
+            blurLabel.widthAnchor.constraint(equalToConstant: 90),
+            blurSlider.leadingAnchor.constraint(equalTo: blurLabel.trailingAnchor, constant: 8),
+            blurSlider.centerYAnchor.constraint(equalTo: blurRow.centerYAnchor),
+            blurValueLabel.leadingAnchor.constraint(equalTo: blurSlider.trailingAnchor, constant: 8),
+            blurValueLabel.trailingAnchor.constraint(equalTo: blurRow.trailingAnchor),
+            blurValueLabel.centerYAnchor.constraint(equalTo: blurRow.centerYAnchor),
+            blurValueLabel.widthAnchor.constraint(equalToConstant: 35)
+        ])
+        contentStack.addArrangedSubview(blurRow)
 
         // Image well
         imageWell.wantsLayer = true
@@ -866,6 +920,12 @@ class StartScreenView: NSView {
         UserDefaults.standard.set(selectedMode.rawValue, forKey: "privacyMode")
     }
 
+    @objc private func blurSliderChanged() {
+        blurIntensity = blurSlider.doubleValue
+        blurValueLabel.stringValue = "\(Int(blurIntensity))"
+        UserDefaults.standard.set(blurIntensity, forKey: "blurIntensity")
+    }
+
     @objc private func chooseImage() {
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.image]
@@ -990,6 +1050,9 @@ class StartScreenView: NSView {
         super.viewDidMoveToWindow()
         updateHotkeyLabels()
         refreshExcludedAppsList()
+        // Update blur slider from loaded settings
+        blurSlider?.doubleValue = blurIntensity
+        blurValueLabel?.stringValue = "\(Int(blurIntensity))"
     }
 
     @objc private func startClicked() {
@@ -1019,6 +1082,8 @@ class ScreenCaptureEngine: NSObject {
     weak var delegate: ScreenCaptureEngineDelegate?
     private var windowsToExclude: [NSWindow]
     private var appNamesToExclude: [String]
+    private var currentDisplay: SCDisplay?
+    private var refreshTimer: Timer?
 
     init(previewView: PreviewView, excludingWindows: [NSWindow] = [], excludingApps: [String] = []) {
         self.previewView = previewView
@@ -1039,6 +1104,11 @@ class ScreenCaptureEngine: NSObject {
             previewView.customImage = image
         }
 
+        // Load blur intensity
+        if UserDefaults.standard.object(forKey: "blurIntensity") != nil {
+            previewView.blurIntensity = UserDefaults.standard.double(forKey: "blurIntensity")
+        }
+
         previewView.privacyMode = currentPrivacyMode
     }
 
@@ -1057,6 +1127,8 @@ class ScreenCaptureEngine: NSObject {
     }
 
     func stopCapture() {
+        refreshTimer?.invalidate()
+        refreshTimer = nil
         Task {
             try? await stream?.stopCapture()
             stream = nil
@@ -1089,6 +1161,32 @@ class ScreenCaptureEngine: NSObject {
             throw NSError(domain: "ScreenCapture", code: -1, userInfo: [NSLocalizedDescriptionKey: "No display found"])
         }
 
+        currentDisplay = display
+
+        let filter = try await buildContentFilter(display: display)
+
+        let streamConfig = SCStreamConfiguration()
+        streamConfig.width = Int(display.width)
+        streamConfig.height = Int(display.height)
+        streamConfig.minimumFrameInterval = CMTime(value: 1, timescale: 30)
+        streamConfig.queueDepth = 5
+
+        stream = SCStream(filter: filter, configuration: streamConfig, delegate: self)
+
+        try stream?.addStreamOutput(self, type: .screen, sampleHandlerQueue: .main)
+        try await stream?.startCapture()
+
+        // Start periodic refresh to catch new windows from excluded apps
+        DispatchQueue.main.async {
+            self.refreshTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
+                self?.refreshExcludedApps()
+            }
+        }
+    }
+
+    private func buildContentFilter(display: SCDisplay) async throws -> SCContentFilter {
+        let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+
         // Find SCWindows matching the NSWindows we want to exclude
         let windowIDsToExclude = windowsToExclude.compactMap { $0.windowNumber > 0 ? CGWindowID($0.windowNumber) : nil }
         var scWindowsToExclude = content.windows.filter { windowIDsToExclude.contains($0.windowID) }
@@ -1106,18 +1204,20 @@ class ScreenCaptureEngine: NSObject {
             }
         }
 
-        let filter = SCContentFilter(display: display, excludingWindows: scWindowsToExclude)
+        return SCContentFilter(display: display, excludingWindows: scWindowsToExclude)
+    }
 
-        let streamConfig = SCStreamConfiguration()
-        streamConfig.width = Int(display.width)
-        streamConfig.height = Int(display.height)
-        streamConfig.minimumFrameInterval = CMTime(value: 1, timescale: 30)
-        streamConfig.queueDepth = 5
+    private func refreshExcludedApps() {
+        guard let display = currentDisplay, let stream = stream else { return }
 
-        stream = SCStream(filter: filter, configuration: streamConfig, delegate: self)
-
-        try stream?.addStreamOutput(self, type: .screen, sampleHandlerQueue: .main)
-        try await stream?.startCapture()
+        Task {
+            do {
+                let newFilter = try await buildContentFilter(display: display)
+                try await stream.updateContentFilter(newFilter)
+            } catch {
+                // Silently ignore refresh errors
+            }
+        }
     }
 
     func togglePrivacy() {
@@ -1148,10 +1248,9 @@ extension ScreenCaptureEngine: SCStreamOutput {
             return
         }
 
+        // Always send frames - PreviewView handles blur overlay when privacy is enabled
         DispatchQueue.main.async {
-            if !self.isPrivacyEnabled {
-                self.previewView.updateFrame(imageBuffer)
-            }
+            self.previewView.updateFrame(imageBuffer)
         }
     }
 }
@@ -1163,6 +1262,8 @@ class PreviewView: NSView {
     var isPrivacyEnabled = false
     var privacyMode: PrivacyMode = .blur
     var customImage: NSImage?
+    var blurIntensity: Double = 50.0  // 0-100 scale
+    private let ciContext = CIContext()
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -1215,13 +1316,27 @@ class PreviewView: NSView {
             context.fill(bounds)
 
         case .blur:
-            context.setFillColor(NSColor.white.cgColor)
-            context.fill(bounds)
+            // Apply real-time Gaussian blur to the live frame
+            if let frameToBlur = currentFrame {
+                let ciImage = CIImage(cvImageBuffer: frameToBlur)
 
-            context.setFillColor(NSColor.systemGray.withAlphaComponent(0.1).cgColor)
-            for y in stride(from: 0, to: bounds.height, by: 40) {
-                context.fill(CGRect(x: 0, y: y, width: bounds.width, height: 20))
+                if let blurFilter = CIFilter(name: "CIGaussianBlur") {
+                    blurFilter.setValue(ciImage, forKey: kCIInputImageKey)
+                    blurFilter.setValue(blurIntensity, forKey: kCIInputRadiusKey)
+
+                    if let outputImage = blurFilter.outputImage {
+                        // Crop to original size (blur expands the image)
+                        let croppedImage = outputImage.cropped(to: ciImage.extent)
+                        if let blurredCGImage = ciContext.createCGImage(croppedImage, from: ciImage.extent) {
+                            context.draw(blurredCGImage, in: bounds)
+                            return
+                        }
+                    }
+                }
             }
+            // Fallback: gray screen if no frame
+            context.setFillColor(NSColor.darkGray.cgColor)
+            context.fill(bounds)
 
         case .image:
             if let image = customImage {
@@ -1288,7 +1403,7 @@ class HUDWindow: NSWindow {
 
     init() {
         super.init(
-            contentRect: NSRect(x: 0, y: 0, width: 200, height: 100),
+            contentRect: NSRect(x: 0, y: 0, width: 160, height: 80),
             styleMask: .borderless,
             backing: .buffered,
             defer: false
@@ -1299,30 +1414,37 @@ class HUDWindow: NSWindow {
         self.backgroundColor = .clear
         self.ignoresMouseEvents = true
         self.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        self.sharingType = .none  // Hide from all screen capture
 
         setupUI()
     }
 
     func setupUI() {
-        let containerView = NSView(frame: NSRect(x: 0, y: 0, width: 200, height: 100))
-        containerView.wantsLayer = true
-        containerView.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.85).cgColor
-        containerView.layer?.cornerRadius = 16
+        // Liquid glass effect using NSVisualEffectView
+        let visualEffectView = NSVisualEffectView(frame: NSRect(x: 0, y: 0, width: 160, height: 80))
+        visualEffectView.material = .hudWindow
+        visualEffectView.state = .active
+        visualEffectView.blendingMode = .behindWindow
+        visualEffectView.wantsLayer = true
+        visualEffectView.layer?.cornerRadius = 20
+        visualEffectView.layer?.masksToBounds = true
 
-        iconView.frame = NSRect(x: 60, y: 45, width: 80, height: 40)
+        // Icon
+        iconView.frame = NSRect(x: 20, y: 25, width: 30, height: 30)
         iconView.imageScaling = .scaleProportionallyUpOrDown
-        containerView.addSubview(iconView)
+        visualEffectView.addSubview(iconView)
 
-        label.frame = NSRect(x: 10, y: 15, width: 180, height: 25)
+        // Label
+        label.frame = NSRect(x: 55, y: 25, width: 95, height: 30)
         label.isEditable = false
         label.isBordered = false
         label.backgroundColor = .clear
-        label.textColor = .white
-        label.alignment = .center
-        label.font = NSFont.systemFont(ofSize: 16, weight: .medium)
-        containerView.addSubview(label)
+        label.textColor = .labelColor
+        label.alignment = .left
+        label.font = NSFont.systemFont(ofSize: 15, weight: .medium)
+        visualEffectView.addSubview(label)
 
-        contentView = containerView
+        contentView = visualEffectView
     }
 
     func show(isPrivate: Bool) {
@@ -1338,9 +1460,10 @@ class HUDWindow: NSWindow {
 
         iconView.contentTintColor = isPrivate ? .systemRed : .systemGreen
 
+        // Position at bottom center
         if let screen = NSScreen.main {
             let x = (screen.frame.width - frame.width) / 2
-            let y = screen.frame.height - frame.height - 100
+            let y: CGFloat = 120  // 120 points from bottom
             setFrameOrigin(NSPoint(x: x, y: y))
         }
 
