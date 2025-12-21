@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.4] - 2024-12-21
+
+### Changed
+- **Instant app hiding**: Excluded apps now hide instantly when launched (was 2-second delay)
+- **Event-driven detection**: Replaced 2-second polling timer with NSWorkspace notifications
+- **Zero idle CPU**: No more background polling - only updates when apps actually launch/activate
+
+### Performance
+- Removed continuous 2-second timer (saves CPU when idle)
+- Uses system notifications for immediate response (~300ms after app launch)
+- More efficient than polling - only runs when needed
+
 ## [1.3.3] - 2024-12-21
 
 ### Fixed
@@ -108,6 +120,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| 1.3.4 | 2024-12-21 | Instant app hiding, event-driven detection, zero idle CPU |
 | 1.3.3 | 2024-12-21 | HUD above fullscreen, green menu icon, faster hotkeys |
 | 1.3.2 | 2024-12-21 | Dynamic aspect ratio, smart visibility (hidden until sharing) |
 | 1.3.1 | 2024-12-21 | Fix window sharing visibility, self-hide toggle |
