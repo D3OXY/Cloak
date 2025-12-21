@@ -400,7 +400,11 @@ protocol MainViewDelegate: AnyObject {
 
 class MainView: NSView {
     weak var delegate: MainViewDelegate?
-    weak var hotkeyManager: HotkeyManager?
+    weak var hotkeyManager: HotkeyManager? {
+        didSet {
+            startScreenView?.hotkeyManager = hotkeyManager
+        }
+    }
 
     private var startScreenView: StartScreenView!
     var previewView: PreviewView!
@@ -441,11 +445,6 @@ class MainView: NSView {
 
         // Controls container (shown on hover during capture)
         setupControls()
-    }
-
-    func updateHotkeyManager(_ manager: HotkeyManager) {
-        hotkeyManager = manager
-        startScreenView.hotkeyManager = manager
     }
 
     private func setupControls() {
