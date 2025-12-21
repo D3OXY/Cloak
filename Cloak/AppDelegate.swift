@@ -1489,26 +1489,26 @@ class ScreenCaptureEngine: NSObject {
     private func setupWorkspaceObservers() {
         let center = NSWorkspace.shared.notificationCenter
 
-        // Observe app launches - refresh filter when any app launches
+        // Observe app launches - schedule refreshes to catch window creation
         let launchObserver = center.addObserver(
             forName: NSWorkspace.didLaunchApplicationNotification,
             object: nil,
             queue: .main
-        ) { [weak self] notification in
-            // Small delay to let the window appear
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                self?.refreshExcludedApps()
-            }
+        ) { [weak self] _ in
+            // 3 refreshes over 1 second - coalesced if multiple apps launch
+            self?.scheduleRefresh(delay: 0.1)
+            self?.scheduleRefresh(delay: 0.5)
+            self?.scheduleRefresh(delay: 1.0)
         }
         workspaceObservers.append(launchObserver)
 
-        // Also observe when apps become active (window might appear)
+        // Also observe when apps become active
         let activateObserver = center.addObserver(
             forName: NSWorkspace.didActivateApplicationNotification,
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            self?.refreshExcludedApps()
+            self?.scheduleRefresh(delay: 0.15)
         }
         workspaceObservers.append(activateObserver)
 
@@ -1518,9 +1518,25 @@ class ScreenCaptureEngine: NSObject {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            self?.refreshExcludedApps()
+            self?.scheduleRefresh(delay: 0.1)
         }
         workspaceObservers.append(unhideObserver)
+    }
+
+    // Schedule a refresh with debouncing - coalesces requests within 50ms
+    private var lastRefreshTime: TimeInterval = 0
+    private func scheduleRefresh(delay: TimeInterval) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+            guard let self = self else { return }
+
+            // Debounce: skip if we refreshed within last 50ms
+            let now = CACurrentMediaTime()
+            if now - self.lastRefreshTime < 0.05 {
+                return
+            }
+            self.lastRefreshTime = now
+            self.refreshExcludedApps()
+        }
     }
 
     private func removeWorkspaceObservers() {
@@ -1847,11 +1863,12 @@ class HUDWindow: NSWindow {
             defer: false
         )
 
-        self.level = .screenSaver  // Show above fullscreen apps
+        // Use maximum window level to appear above fullscreen apps
+        self.level = NSWindow.Level(rawValue: Int(CGShieldingWindowLevel()) + 1)
         self.isOpaque = false
         self.backgroundColor = .clear
         self.ignoresMouseEvents = true
-        self.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+        self.collectionBehavior = [.canJoinAllSpaces, .stationary]
         self.sharingType = .none  // Hide from all screen capture
 
         setupUI()
@@ -2007,10 +2024,11 @@ class PiPWindow: NSWindow {
         self.titlebarAppearsTransparent = true
         self.titleVisibility = .hidden
         self.isMovableByWindowBackground = true
-        self.level = .screenSaver  // Show above fullscreen apps
+        // Use maximum window level to appear above fullscreen apps
+        self.level = NSWindow.Level(rawValue: Int(CGShieldingWindowLevel()) + 1)
         self.isOpaque = false
         self.backgroundColor = NSColor.black.withAlphaComponent(0.9)
-        self.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
+        self.collectionBehavior = [.canJoinAllSpaces, .stationary]
         self.sharingType = .none  // Hide from all screen capture
         self.minSize = NSSize(width: 160, height: 100)
         self.aspectRatio = NSSize(width: 16, height: 10)  // Lock aspect ratio
