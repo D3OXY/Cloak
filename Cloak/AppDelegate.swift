@@ -5,25 +5,25 @@ import Carbon.HIToolbox
 
 class AppDelegate: NSObject, NSApplicationDelegate {
     var window: NSWindow!
-    var settingsWindow: NSWindow?
     var captureEngine: ScreenCaptureEngine?
     var statusItem: NSStatusItem!
     var hudWindow: HUDWindow?
     var mainView: MainView!
-    var globalHotKeyRef: EventHotKeyRef?
+    var hotkeyManager: HotkeyManager!
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        hotkeyManager = HotkeyManager()
+        hotkeyManager.delegate = self
+        hotkeyManager.registerHotkeys()
+
         setupStatusBar()
         setupMainWindow()
-        setupGlobalHotKey()
         setupMenuBar()
         NSApp.activate(ignoringOtherApps: true)
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        if let hotKeyRef = globalHotKeyRef {
-            UnregisterEventHotKey(hotKeyRef)
-        }
+        hotkeyManager.unregisterAllHotkeys()
     }
 
     func setupStatusBar() {
@@ -57,7 +57,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(NSMenuItem.separator())
 
         if isCapturing {
-            menu.addItem(NSMenuItem(title: "Toggle Privacy (⌘⌥H)", action: #selector(togglePrivacy), keyEquivalent: ""))
+            menu.addItem(NSMenuItem(title: "Toggle Privacy", action: #selector(togglePrivacy), keyEquivalent: ""))
             menu.addItem(NSMenuItem(title: "Stop Sharing", action: #selector(stopCapture), keyEquivalent: ""))
         } else {
             menu.addItem(NSMenuItem(title: "Start Sharing", action: #selector(startCapture), keyEquivalent: ""))
@@ -94,6 +94,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         mainView = MainView(frame: windowRect)
         mainView.delegate = self
+        mainView.hotkeyManager = hotkeyManager
         window.contentView = mainView
 
         window.makeKeyAndOrderFront(nil)
@@ -114,50 +115,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         mainMenu.addItem(viewMenuItem)
         let viewMenu = NSMenu(title: "View")
         viewMenuItem.submenu = viewMenu
-        let privacyItem = NSMenuItem(title: "Toggle Privacy", action: #selector(togglePrivacy), keyEquivalent: "h")
-        privacyItem.keyEquivalentModifierMask = [.command, .option]
-        viewMenu.addItem(privacyItem)
+        viewMenu.addItem(NSMenuItem(title: "Toggle Privacy", action: #selector(togglePrivacy), keyEquivalent: ""))
         viewMenu.addItem(NSMenuItem(title: "Enter Full Screen", action: #selector(toggleFullScreen), keyEquivalent: "f"))
 
         NSApp.mainMenu = mainMenu
-    }
-
-    func setupGlobalHotKey() {
-        // Register global hotkey: Cmd+Option+H
-        var hotKeyRef: EventHotKeyRef?
-        var hotKeyID = EventHotKeyID()
-        hotKeyID.signature = OSType(0x434C4B00) // "CLK\0"
-        hotKeyID.id = 1
-
-        // h = 4 in virtual key codes
-        let status = RegisterEventHotKey(
-            UInt32(kVK_ANSI_H),
-            UInt32(cmdKey | optionKey),
-            hotKeyID,
-            GetApplicationEventTarget(),
-            0,
-            &hotKeyRef
-        )
-
-        if status == noErr {
-            globalHotKeyRef = hotKeyRef
-        }
-
-        // Install event handler
-        var eventType = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
-        InstallEventHandler(GetApplicationEventTarget(), { (_, event, _) -> OSStatus in
-            var hotKeyID = EventHotKeyID()
-            GetEventParameter(event, EventParamName(kEventParamDirectObject), EventParamType(typeEventHotKeyID), nil, MemoryLayout<EventHotKeyID>.size, nil, &hotKeyID)
-
-            if hotKeyID.id == 1 {
-                DispatchQueue.main.async {
-                    if let appDelegate = NSApp.delegate as? AppDelegate {
-                        appDelegate.togglePrivacy()
-                    }
-                }
-            }
-            return noErr
-        }, 1, &eventType, nil, nil)
     }
 
     @objc func startCapture() {
@@ -192,7 +153,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func showAbout() {
         let alert = NSAlert()
         alert.messageText = "Cloak"
-        alert.informativeText = "Hide your screen during video calls.\n\nPress ⌘⌥H to toggle privacy mode.\nShare the Cloak window in Zoom/Meet, not your entire screen.\n\nYour screen stays normal while viewers see the privacy overlay."
+        alert.informativeText = "Hide your screen during video calls.\n\nShare the Cloak window in Zoom/Meet, not your entire screen.\n\nYour screen stays normal while viewers see the privacy overlay."
         alert.alertStyle = .informational
         alert.addButton(withTitle: "OK")
         alert.runModal()
@@ -234,6 +195,200 @@ extension AppDelegate: MainViewDelegate {
     }
 }
 
+extension AppDelegate: HotkeyManagerDelegate {
+    func hotkeyDidTrigger(action: HotkeyAction) {
+        switch action {
+        case .togglePrivacy:
+            togglePrivacy()
+        case .startStopSharing:
+            if captureEngine != nil {
+                stopCapture()
+            } else {
+                startCapture()
+            }
+        case .toggleFullscreen:
+            toggleFullScreen()
+        }
+    }
+}
+
+// MARK: - Hotkey Manager
+
+enum HotkeyAction: String, CaseIterable {
+    case togglePrivacy = "togglePrivacy"
+    case startStopSharing = "startStopSharing"
+    case toggleFullscreen = "toggleFullscreen"
+
+    var displayName: String {
+        switch self {
+        case .togglePrivacy: return "Toggle Privacy"
+        case .startStopSharing: return "Start/Stop Sharing"
+        case .toggleFullscreen: return "Toggle Fullscreen"
+        }
+    }
+}
+
+struct HotkeyConfig: Codable {
+    var keyCode: UInt32
+    var modifiers: UInt32
+
+    var displayString: String {
+        var parts: [String] = []
+        if modifiers & UInt32(controlKey) != 0 { parts.append("⌃") }
+        if modifiers & UInt32(optionKey) != 0 { parts.append("⌥") }
+        if modifiers & UInt32(shiftKey) != 0 { parts.append("⇧") }
+        if modifiers & UInt32(cmdKey) != 0 { parts.append("⌘") }
+
+        if let keyName = keyCodeToString(keyCode) {
+            parts.append(keyName)
+        }
+
+        return parts.joined()
+    }
+
+    private func keyCodeToString(_ keyCode: UInt32) -> String? {
+        let keyMap: [UInt32: String] = [
+            0: "A", 1: "S", 2: "D", 3: "F", 4: "H", 5: "G", 6: "Z", 7: "X",
+            8: "C", 9: "V", 11: "B", 12: "Q", 13: "W", 14: "E", 15: "R",
+            16: "Y", 17: "T", 18: "1", 19: "2", 20: "3", 21: "4", 22: "6",
+            23: "5", 24: "=", 25: "9", 26: "7", 27: "-", 28: "8", 29: "0",
+            30: "]", 31: "O", 32: "U", 33: "[", 34: "I", 35: "P", 37: "L",
+            38: "J", 39: "'", 40: "K", 41: ";", 42: "\\", 43: ",", 44: "/",
+            45: "N", 46: "M", 47: ".", 49: "Space", 50: "`",
+            36: "↩", 48: "⇥", 51: "⌫", 53: "⎋",
+            96: "F5", 97: "F6", 98: "F7", 99: "F3", 100: "F8",
+            101: "F9", 103: "F11", 105: "F13", 107: "F14", 109: "F10",
+            111: "F12", 113: "F15", 118: "F4", 119: "F2", 120: "F1",
+            122: "F1", 123: "←", 124: "→", 125: "↓", 126: "↑"
+        ]
+        return keyMap[keyCode]
+    }
+}
+
+protocol HotkeyManagerDelegate: AnyObject {
+    func hotkeyDidTrigger(action: HotkeyAction)
+}
+
+class HotkeyManager {
+    weak var delegate: HotkeyManagerDelegate?
+    private var hotkeys: [HotkeyAction: HotkeyConfig] = [:]
+    private var hotkeyRefs: [HotkeyAction: EventHotKeyRef] = [:]
+    private var eventHandlerRef: EventHandlerRef?
+
+    static let shared = HotkeyManager()
+
+    init() {
+        loadHotkeys()
+    }
+
+    func loadHotkeys() {
+        if let data = UserDefaults.standard.data(forKey: "hotkeys"),
+           let decoded = try? JSONDecoder().decode([String: HotkeyConfig].self, from: data) {
+            for (key, config) in decoded {
+                if let action = HotkeyAction(rawValue: key) {
+                    hotkeys[action] = config
+                }
+            }
+        }
+    }
+
+    func saveHotkeys() {
+        var toSave: [String: HotkeyConfig] = [:]
+        for (action, config) in hotkeys {
+            toSave[action.rawValue] = config
+        }
+        if let data = try? JSONEncoder().encode(toSave) {
+            UserDefaults.standard.set(data, forKey: "hotkeys")
+        }
+    }
+
+    func getHotkey(for action: HotkeyAction) -> HotkeyConfig? {
+        return hotkeys[action]
+    }
+
+    func setHotkey(for action: HotkeyAction, keyCode: UInt32, modifiers: UInt32) {
+        // Unregister old hotkey if exists
+        if let ref = hotkeyRefs[action] {
+            UnregisterEventHotKey(ref)
+            hotkeyRefs.removeValue(forKey: action)
+        }
+
+        let config = HotkeyConfig(keyCode: keyCode, modifiers: modifiers)
+        hotkeys[action] = config
+        saveHotkeys()
+
+        // Register new hotkey
+        registerHotkey(action: action, config: config)
+    }
+
+    func removeHotkey(for action: HotkeyAction) {
+        if let ref = hotkeyRefs[action] {
+            UnregisterEventHotKey(ref)
+            hotkeyRefs.removeValue(forKey: action)
+        }
+        hotkeys.removeValue(forKey: action)
+        saveHotkeys()
+    }
+
+    func registerHotkeys() {
+        // Install event handler once
+        var eventType = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
+
+        let handler: EventHandlerUPP = { (_, event, _) -> OSStatus in
+            var hotKeyID = EventHotKeyID()
+            GetEventParameter(event, EventParamName(kEventParamDirectObject), EventParamType(typeEventHotKeyID), nil, MemoryLayout<EventHotKeyID>.size, nil, &hotKeyID)
+
+            DispatchQueue.main.async {
+                if let appDelegate = NSApp.delegate as? AppDelegate {
+                    if let action = HotkeyAction.allCases.first(where: { $0.hashValue == Int(hotKeyID.id) }) {
+                        appDelegate.hotkeyManager.delegate?.hotkeyDidTrigger(action: action)
+                    }
+                }
+            }
+            return noErr
+        }
+
+        InstallEventHandler(GetApplicationEventTarget(), handler, 1, &eventType, nil, &eventHandlerRef)
+
+        // Register all configured hotkeys
+        for (action, config) in hotkeys {
+            registerHotkey(action: action, config: config)
+        }
+    }
+
+    private func registerHotkey(action: HotkeyAction, config: HotkeyConfig) {
+        var hotKeyRef: EventHotKeyRef?
+        var hotKeyID = EventHotKeyID()
+        hotKeyID.signature = OSType(0x434C4B00) // "CLK\0"
+        hotKeyID.id = UInt32(action.hashValue)
+
+        let status = RegisterEventHotKey(
+            config.keyCode,
+            config.modifiers,
+            hotKeyID,
+            GetApplicationEventTarget(),
+            0,
+            &hotKeyRef
+        )
+
+        if status == noErr, let ref = hotKeyRef {
+            hotkeyRefs[action] = ref
+        }
+    }
+
+    func unregisterAllHotkeys() {
+        for (_, ref) in hotkeyRefs {
+            UnregisterEventHotKey(ref)
+        }
+        hotkeyRefs.removeAll()
+
+        if let handlerRef = eventHandlerRef {
+            RemoveEventHandler(handlerRef)
+            eventHandlerRef = nil
+        }
+    }
+}
+
 // MARK: - Main View
 
 protocol MainViewDelegate: AnyObject {
@@ -245,6 +400,7 @@ protocol MainViewDelegate: AnyObject {
 
 class MainView: NSView {
     weak var delegate: MainViewDelegate?
+    weak var hotkeyManager: HotkeyManager?
 
     private var startScreenView: StartScreenView!
     var previewView: PreviewView!
@@ -285,6 +441,11 @@ class MainView: NSView {
 
         // Controls container (shown on hover during capture)
         setupControls()
+    }
+
+    func updateHotkeyManager(_ manager: HotkeyManager) {
+        hotkeyManager = manager
+        startScreenView.hotkeyManager = manager
     }
 
     private func setupControls() {
@@ -405,11 +566,16 @@ class MainView: NSView {
 
 class StartScreenView: NSView {
     var onStart: (() -> Void)?
+    weak var hotkeyManager: HotkeyManager?
 
     private let modeSegmented = NSSegmentedControl()
     private let imageWell = NSImageView()
     private var selectedMode: PrivacyMode = .blur
     private var customImage: NSImage?
+
+    private var hotkeyButtons: [HotkeyAction: NSButton] = [:]
+    private var recordingAction: HotkeyAction?
+    private var globalMonitor: Any?
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -439,6 +605,18 @@ class StartScreenView: NSView {
         }
     }
 
+    func updateHotkeyLabels() {
+        for action in HotkeyAction.allCases {
+            if let button = hotkeyButtons[action] {
+                if let config = hotkeyManager?.getHotkey(for: action) {
+                    button.title = config.displayString
+                } else {
+                    button.title = "Click to set"
+                }
+            }
+        }
+    }
+
     private func setupUI() {
         wantsLayer = true
         layer?.backgroundColor = NSColor(white: 0.1, alpha: 1).cgColor
@@ -459,14 +637,19 @@ class StartScreenView: NSView {
         subtitleLabel.translatesAutoresizingMaskIntoConstraints = false
         addSubview(subtitleLabel)
 
-        // Privacy mode label
+        // Create a scroll view for content
+        let contentStack = NSStackView()
+        contentStack.orientation = .vertical
+        contentStack.spacing = 15
+        contentStack.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(contentStack)
+
+        // Privacy mode section
         let modeLabel = NSTextField(labelWithString: "Privacy Mode")
         modeLabel.font = NSFont.systemFont(ofSize: 14, weight: .medium)
         modeLabel.textColor = .white
-        modeLabel.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(modeLabel)
+        contentStack.addArrangedSubview(modeLabel)
 
-        // Mode selector
         modeSegmented.segmentCount = 3
         modeSegmented.setLabel("Blur", forSegment: 0)
         modeSegmented.setLabel("Image", forSegment: 1)
@@ -474,8 +657,7 @@ class StartScreenView: NSView {
         modeSegmented.selectedSegment = 0
         modeSegmented.target = self
         modeSegmented.action = #selector(modeChanged)
-        modeSegmented.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(modeSegmented)
+        contentStack.addArrangedSubview(modeSegmented)
 
         // Image well
         imageWell.wantsLayer = true
@@ -485,13 +667,24 @@ class StartScreenView: NSView {
         imageWell.layer?.borderColor = NSColor.gray.withAlphaComponent(0.5).cgColor
         imageWell.imageScaling = .scaleProportionallyUpOrDown
         imageWell.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(imageWell)
+        contentStack.addArrangedSubview(imageWell)
 
         // Choose image button
         let chooseButton = NSButton(title: "Choose Image", target: self, action: #selector(chooseImage))
         chooseButton.bezelStyle = .rounded
-        chooseButton.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(chooseButton)
+        contentStack.addArrangedSubview(chooseButton)
+
+        // Hotkey section
+        let hotkeyLabel = NSTextField(labelWithString: "Keyboard Shortcuts")
+        hotkeyLabel.font = NSFont.systemFont(ofSize: 14, weight: .medium)
+        hotkeyLabel.textColor = .white
+        contentStack.addArrangedSubview(hotkeyLabel)
+
+        // Create hotkey rows
+        for action in HotkeyAction.allCases {
+            let row = createHotkeyRow(for: action)
+            contentStack.addArrangedSubview(row)
+        }
 
         // Start button
         let startButton = NSButton(title: "Start Sharing", target: self, action: #selector(startClicked))
@@ -502,7 +695,7 @@ class StartScreenView: NSView {
         addSubview(startButton)
 
         // Instructions
-        let instructionsLabel = NSTextField(labelWithString: "1. Click 'Start Sharing'\n2. In Zoom/Meet, share the 'Cloak' window\n3. Press ⌘⌥H to toggle privacy mode")
+        let instructionsLabel = NSTextField(labelWithString: "1. Click 'Start Sharing'\n2. In Zoom/Meet, share the 'Cloak' window\n3. Use your hotkeys to toggle privacy")
         instructionsLabel.font = NSFont.systemFont(ofSize: 13)
         instructionsLabel.textColor = .secondaryLabelColor
         instructionsLabel.alignment = .center
@@ -513,35 +706,75 @@ class StartScreenView: NSView {
         // Constraints
         NSLayoutConstraint.activate([
             titleLabel.centerXAnchor.constraint(equalTo: centerXAnchor),
-            titleLabel.topAnchor.constraint(equalTo: topAnchor, constant: 60),
+            titleLabel.topAnchor.constraint(equalTo: topAnchor, constant: 40),
 
             subtitleLabel.centerXAnchor.constraint(equalTo: centerXAnchor),
-            subtitleLabel.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 10),
+            subtitleLabel.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 8),
 
-            modeLabel.centerXAnchor.constraint(equalTo: centerXAnchor),
-            modeLabel.topAnchor.constraint(equalTo: subtitleLabel.bottomAnchor, constant: 40),
+            contentStack.centerXAnchor.constraint(equalTo: centerXAnchor),
+            contentStack.topAnchor.constraint(equalTo: subtitleLabel.bottomAnchor, constant: 25),
+            contentStack.widthAnchor.constraint(equalToConstant: 350),
 
-            modeSegmented.centerXAnchor.constraint(equalTo: centerXAnchor),
-            modeSegmented.topAnchor.constraint(equalTo: modeLabel.bottomAnchor, constant: 10),
-            modeSegmented.widthAnchor.constraint(equalToConstant: 300),
-
-            imageWell.centerXAnchor.constraint(equalTo: centerXAnchor),
-            imageWell.topAnchor.constraint(equalTo: modeSegmented.bottomAnchor, constant: 20),
-            imageWell.widthAnchor.constraint(equalToConstant: 300),
-            imageWell.heightAnchor.constraint(equalToConstant: 120),
-
-            chooseButton.centerXAnchor.constraint(equalTo: centerXAnchor),
-            chooseButton.topAnchor.constraint(equalTo: imageWell.bottomAnchor, constant: 10),
+            imageWell.heightAnchor.constraint(equalToConstant: 80),
+            imageWell.widthAnchor.constraint(equalToConstant: 350),
 
             startButton.centerXAnchor.constraint(equalTo: centerXAnchor),
-            startButton.topAnchor.constraint(equalTo: chooseButton.bottomAnchor, constant: 30),
+            startButton.topAnchor.constraint(equalTo: contentStack.bottomAnchor, constant: 25),
             startButton.widthAnchor.constraint(equalToConstant: 200),
             startButton.heightAnchor.constraint(equalToConstant: 44),
 
             instructionsLabel.centerXAnchor.constraint(equalTo: centerXAnchor),
-            instructionsLabel.topAnchor.constraint(equalTo: startButton.bottomAnchor, constant: 30),
+            instructionsLabel.topAnchor.constraint(equalTo: startButton.bottomAnchor, constant: 20),
             instructionsLabel.widthAnchor.constraint(lessThanOrEqualToConstant: 400)
         ])
+    }
+
+    private func createHotkeyRow(for action: HotkeyAction) -> NSView {
+        let row = NSView()
+        row.translatesAutoresizingMaskIntoConstraints = false
+
+        let label = NSTextField(labelWithString: action.displayName)
+        label.font = NSFont.systemFont(ofSize: 12)
+        label.textColor = .secondaryLabelColor
+        label.translatesAutoresizingMaskIntoConstraints = false
+        row.addSubview(label)
+
+        let button = NSButton(title: "Click to set", target: self, action: #selector(hotkeyButtonClicked(_:)))
+        button.bezelStyle = .rounded
+        button.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .medium)
+        button.tag = action.hashValue
+        button.translatesAutoresizingMaskIntoConstraints = false
+        row.addSubview(button)
+        hotkeyButtons[action] = button
+
+        let clearButton = NSButton(title: "✕", target: self, action: #selector(clearHotkeyClicked(_:)))
+        clearButton.bezelStyle = .inline
+        clearButton.tag = action.hashValue
+        clearButton.translatesAutoresizingMaskIntoConstraints = false
+        row.addSubview(clearButton)
+
+        NSLayoutConstraint.activate([
+            row.heightAnchor.constraint(equalToConstant: 30),
+
+            label.leadingAnchor.constraint(equalTo: row.leadingAnchor),
+            label.centerYAnchor.constraint(equalTo: row.centerYAnchor),
+            label.widthAnchor.constraint(equalToConstant: 130),
+
+            button.leadingAnchor.constraint(equalTo: label.trailingAnchor, constant: 10),
+            button.centerYAnchor.constraint(equalTo: row.centerYAnchor),
+            button.widthAnchor.constraint(equalToConstant: 150),
+
+            clearButton.leadingAnchor.constraint(equalTo: button.trailingAnchor, constant: 5),
+            clearButton.centerYAnchor.constraint(equalTo: row.centerYAnchor),
+            clearButton.trailingAnchor.constraint(equalTo: row.trailingAnchor)
+        ])
+
+        return row
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        updateHotkeyLabels()
     }
 
     @objc private func modeChanged() {
@@ -566,6 +799,57 @@ class StartScreenView: NSView {
                 UserDefaults.standard.set(url.path, forKey: "customImagePath")
             }
         }
+    }
+
+    @objc private func hotkeyButtonClicked(_ sender: NSButton) {
+        guard let action = HotkeyAction.allCases.first(where: { $0.hashValue == sender.tag }) else { return }
+
+        // Cancel any existing recording
+        stopRecording()
+
+        recordingAction = action
+        sender.title = "Press keys..."
+
+        // Start listening for key events
+        globalMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { [weak self] event in
+            guard let self = self, let action = self.recordingAction else { return event }
+
+            if event.type == .keyDown {
+                let keyCode = UInt32(event.keyCode)
+                var modifiers: UInt32 = 0
+
+                if event.modifierFlags.contains(.command) { modifiers |= UInt32(cmdKey) }
+                if event.modifierFlags.contains(.option) { modifiers |= UInt32(optionKey) }
+                if event.modifierFlags.contains(.control) { modifiers |= UInt32(controlKey) }
+                if event.modifierFlags.contains(.shift) { modifiers |= UInt32(shiftKey) }
+
+                // Require at least one modifier
+                if modifiers != 0 {
+                    self.hotkeyManager?.setHotkey(for: action, keyCode: keyCode, modifiers: modifiers)
+                    self.stopRecording()
+                    self.updateHotkeyLabels()
+                }
+
+                return nil
+            }
+
+            return event
+        }
+    }
+
+    @objc private func clearHotkeyClicked(_ sender: NSButton) {
+        guard let action = HotkeyAction.allCases.first(where: { $0.hashValue == sender.tag }) else { return }
+        hotkeyManager?.removeHotkey(for: action)
+        updateHotkeyLabels()
+    }
+
+    private func stopRecording() {
+        if let monitor = globalMonitor {
+            NSEvent.removeMonitor(monitor)
+            globalMonitor = nil
+        }
+        recordingAction = nil
+        updateHotkeyLabels()
     }
 
     @objc private func startClicked() {
