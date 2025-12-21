@@ -7,11 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0] - 2024-12-21
+
 ### Added
 - **Window exclusion**: Cloak window and HUD are now automatically hidden from the screen capture
 - **App exclusion**: Users can specify apps by name to hide from the captured screen (e.g., hide Slack, 1Password)
 - Multiple apps can be excluded simultaneously
 - Excluded apps list persists between restarts
+- **CHANGELOG.md**: Version history documentation
+- **DEVELOPMENT.md**: Developer guide for contributing
 
 ## [1.0.0] - 2024-12-21
 
@@ -44,4 +48,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| 1.1.0 | 2024-12-21 | App exclusion, self-hiding window, documentation |
 | 1.0.0 | 2024-12-21 | Initial release with privacy toggle, hotkeys, fullscreen |
