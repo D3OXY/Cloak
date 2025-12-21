@@ -229,8 +229,8 @@ extension AppDelegate: MainViewDelegate {
         togglePrivacy()
     }
 
-    func mainViewDidRequestSettings() {
-        // Settings are now inline in the start screen
+    func mainViewDidRequestFullscreen() {
+        toggleFullScreen()
     }
 }
 
@@ -240,7 +240,7 @@ protocol MainViewDelegate: AnyObject {
     func mainViewDidRequestStart()
     func mainViewDidRequestStop()
     func mainViewDidRequestTogglePrivacy()
-    func mainViewDidRequestSettings()
+    func mainViewDidRequestFullscreen()
 }
 
 class MainView: NSView {
@@ -250,6 +250,7 @@ class MainView: NSView {
     var previewView: PreviewView!
     private var stopButton: NSButton!
     private var privacyButton: NSButton!
+    private var fullscreenButton: NSButton!
     private var controlsContainer: NSView!
     private var trackingArea: NSTrackingArea?
 
@@ -287,7 +288,7 @@ class MainView: NSView {
     }
 
     private func setupControls() {
-        controlsContainer = NSView(frame: NSRect(x: 0, y: 0, width: 200, height: 50))
+        controlsContainer = NSView(frame: NSRect(x: 0, y: 0, width: 310, height: 50))
         controlsContainer.wantsLayer = true
         controlsContainer.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.7).cgColor
         controlsContainer.layer?.cornerRadius = 12
@@ -310,6 +311,14 @@ class MainView: NSView {
         privacyButton.target = self
         privacyButton.action = #selector(privacyClicked)
         controlsContainer.addSubview(privacyButton)
+
+        // Fullscreen button
+        fullscreenButton = NSButton(frame: NSRect(x: 200, y: 10, width: 100, height: 30))
+        fullscreenButton.title = "Fullscreen"
+        fullscreenButton.bezelStyle = .rounded
+        fullscreenButton.target = self
+        fullscreenButton.action = #selector(fullscreenClicked)
+        controlsContainer.addSubview(fullscreenButton)
     }
 
     override func updateTrackingAreas() {
@@ -342,9 +351,9 @@ class MainView: NSView {
 
     private func showControls() {
         controlsContainer.frame = NSRect(
-            x: (bounds.width - 200) / 2,
+            x: (bounds.width - 310) / 2,
             y: 20,
-            width: 200,
+            width: 310,
             height: 50
         )
         controlsContainer.isHidden = false
@@ -385,6 +394,10 @@ class MainView: NSView {
 
     @objc private func privacyClicked() {
         delegate?.mainViewDidRequestTogglePrivacy()
+    }
+
+    @objc private func fullscreenClicked() {
+        delegate?.mainViewDidRequestFullscreen()
     }
 }
 
