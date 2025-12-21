@@ -8,6 +8,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var captureEngine: ScreenCaptureEngine?
     var statusItem: NSStatusItem!
     var hudWindow: HUDWindow?
+    var pipWindow: PiPWindow?
     var mainView: MainView!
     var hotkeyManager: HotkeyManager!
 
@@ -152,9 +153,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Make window visible to external screen capture (Google Meet, Zoom, etc.)
         window.sharingType = .readOnly
 
-        // Ensure HUD window exists so it can be excluded
+        // Ensure HUD and PiP windows exist so they can be excluded
         if hudWindow == nil {
             hudWindow = HUDWindow()
+        }
+        if pipWindow == nil {
+            pipWindow = PiPWindow()
         }
 
         // Get settings from start screen
@@ -168,6 +172,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             windowsToExclude.append(window)
             if let hud = hudWindow {
                 windowsToExclude.append(hud)
+            }
+            if let pip = pipWindow {
+                windowsToExclude.append(pip)
             }
         }
 
@@ -186,6 +193,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Hide window from external screen capture again
         window.sharingType = .none
 
+        // Hide PiP window
+        pipWindow?.hide()
+
         mainView.showStartScreen()
         updateStatusBarIcon(isPrivate: false)
     }
@@ -198,6 +208,24 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc func toggleFullScreen() {
         window.toggleFullScreen(nil)
+    }
+
+    @objc func togglePiP() {
+        guard captureEngine != nil else { return }
+
+        if pipWindow == nil {
+            pipWindow = PiPWindow()
+        }
+
+        if pipWindow?.isVisible == true {
+            pipWindow?.hide()
+        } else {
+            pipWindow?.show()
+            // Update PiP with current frame
+            if let frame = mainView.previewView.currentFrame {
+                pipWindow?.updateFrame(frame, isPrivacyEnabled: captureEngine?.isPrivacyEnabled ?? false, privacyMode: captureEngine?.currentPrivacyMode ?? .blur)
+            }
+        }
     }
 
     @objc func showMainWindow() {
@@ -222,13 +250,38 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if hudWindow == nil {
             hudWindow = HUDWindow()
         }
-        hudWindow?.show(isPrivate: isPrivate)
+
+        // Get current frame and settings for HUD preview
+        let frame = mainView.previewView.currentFrame
+        let blurIntensity = mainView.previewView.blurIntensity
+        let privacyMode = captureEngine?.currentPrivacyMode ?? .blur
+        let customImage = mainView.previewView.customImage
+
+        hudWindow?.show(
+            isPrivate: isPrivate,
+            previewFrame: frame,
+            blurIntensity: blurIntensity,
+            privacyMode: privacyMode,
+            customImage: customImage
+        )
     }
 }
 
 extension AppDelegate: ScreenCaptureEngineDelegate {
     func privacyStateDidChange(isPrivate: Bool) {
         updateStatusBarIcon(isPrivate: isPrivate)
+    }
+
+    func didReceiveFrame(_ frame: CVImageBuffer) {
+        // Update PiP window if visible
+        guard let pip = pipWindow, pip.isVisible else { return }
+
+        let isPrivacy = captureEngine?.isPrivacyEnabled ?? false
+        let mode = captureEngine?.currentPrivacyMode ?? .blur
+        let blur = mainView.previewView.blurIntensity
+        let customImg = mainView.previewView.customImage
+
+        pip.updateFrame(frame, isPrivacyEnabled: isPrivacy, privacyMode: mode, blurIntensity: blur, customImage: customImg)
     }
 }
 
@@ -263,6 +316,8 @@ extension AppDelegate: HotkeyManagerDelegate {
             }
         case .toggleFullscreen:
             toggleFullScreen()
+        case .togglePiP:
+            togglePiP()
         }
     }
 }
@@ -297,12 +352,14 @@ enum HotkeyAction: Int, CaseIterable {
     case togglePrivacy = 1
     case startStopSharing = 2
     case toggleFullscreen = 3
+    case togglePiP = 4
 
     var displayName: String {
         switch self {
         case .togglePrivacy: return "Toggle Privacy"
         case .startStopSharing: return "Start/Stop Sharing"
         case .toggleFullscreen: return "Toggle Fullscreen"
+        case .togglePiP: return "Toggle Preview (PiP)"
         }
     }
 
@@ -311,6 +368,7 @@ enum HotkeyAction: Int, CaseIterable {
         case .togglePrivacy: return "togglePrivacy"
         case .startStopSharing: return "startStopSharing"
         case .toggleFullscreen: return "toggleFullscreen"
+        case .togglePiP: return "togglePiP"
         }
     }
 }
@@ -1397,6 +1455,7 @@ class StartScreenView: NSView {
 
 protocol ScreenCaptureEngineDelegate: AnyObject {
     func privacyStateDidChange(isPrivate: Bool)
+    func didReceiveFrame(_ frame: CVImageBuffer)
 }
 
 enum PrivacyMode: String, CaseIterable {
@@ -1626,6 +1685,8 @@ extension ScreenCaptureEngine: SCStreamOutput {
         // Always send frames - PreviewView handles blur overlay when privacy is enabled
         DispatchQueue.main.async {
             self.previewView.updateFrame(imageBuffer)
+            // Notify delegate for PiP updates
+            self.delegate?.didReceiveFrame(imageBuffer)
         }
     }
 }
@@ -1774,11 +1835,13 @@ class PreviewView: NSView {
 class HUDWindow: NSWindow {
     private let label = NSTextField()
     private let iconView = NSImageView()
+    private let previewImageView = NSImageView()
     private var hideTimer: Timer?
+    private let ciContext = CIContext()
 
     init() {
         super.init(
-            contentRect: NSRect(x: 0, y: 0, width: 160, height: 80),
+            contentRect: NSRect(x: 0, y: 0, width: 220, height: 100),
             styleMask: .borderless,
             backing: .buffered,
             defer: false
@@ -1796,7 +1859,7 @@ class HUDWindow: NSWindow {
 
     func setupUI() {
         // Liquid glass effect using NSVisualEffectView
-        let visualEffectView = NSVisualEffectView(frame: NSRect(x: 0, y: 0, width: 160, height: 80))
+        let visualEffectView = NSVisualEffectView(frame: NSRect(x: 0, y: 0, width: 220, height: 100))
         visualEffectView.material = .hudWindow
         visualEffectView.state = .active
         visualEffectView.blendingMode = .behindWindow
@@ -1804,25 +1867,35 @@ class HUDWindow: NSWindow {
         visualEffectView.layer?.cornerRadius = 20
         visualEffectView.layer?.masksToBounds = true
 
+        // Preview thumbnail (16:10 aspect ratio, small)
+        previewImageView.frame = NSRect(x: 14, y: 14, width: 80, height: 50)
+        previewImageView.imageScaling = .scaleProportionallyUpOrDown
+        previewImageView.wantsLayer = true
+        previewImageView.layer?.cornerRadius = 8
+        previewImageView.layer?.masksToBounds = true
+        previewImageView.layer?.borderWidth = 1
+        previewImageView.layer?.borderColor = NSColor.white.withAlphaComponent(0.2).cgColor
+        visualEffectView.addSubview(previewImageView)
+
         // Icon
-        iconView.frame = NSRect(x: 20, y: 25, width: 30, height: 30)
+        iconView.frame = NSRect(x: 104, y: 50, width: 26, height: 26)
         iconView.imageScaling = .scaleProportionallyUpOrDown
         visualEffectView.addSubview(iconView)
 
         // Label
-        label.frame = NSRect(x: 55, y: 25, width: 95, height: 30)
+        label.frame = NSRect(x: 134, y: 50, width: 80, height: 26)
         label.isEditable = false
         label.isBordered = false
         label.backgroundColor = .clear
         label.textColor = .labelColor
         label.alignment = .left
-        label.font = NSFont.systemFont(ofSize: 15, weight: .medium)
+        label.font = NSFont.systemFont(ofSize: 14, weight: .medium)
         visualEffectView.addSubview(label)
 
         contentView = visualEffectView
     }
 
-    func show(isPrivate: Bool) {
+    func show(isPrivate: Bool, previewFrame: CVImageBuffer? = nil, blurIntensity: Double = 50.0, privacyMode: PrivacyMode = .blur, customImage: NSImage? = nil) {
         hideTimer?.invalidate()
 
         if isPrivate {
@@ -1834,6 +1907,9 @@ class HUDWindow: NSWindow {
         }
 
         iconView.contentTintColor = isPrivate ? .systemRed : .systemGreen
+
+        // Update preview thumbnail
+        updatePreviewThumbnail(frame: previewFrame, isPrivate: isPrivate, blurIntensity: blurIntensity, privacyMode: privacyMode, customImage: customImage)
 
         // Position at bottom center
         if let screen = NSScreen.main {
@@ -1850,8 +1926,46 @@ class HUDWindow: NSWindow {
             animator().alphaValue = 1.0
         })
 
-        hideTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: false) { [weak self] _ in
+        hideTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: false) { [weak self] _ in
             self?.hide()
+        }
+    }
+
+    private func updatePreviewThumbnail(frame: CVImageBuffer?, isPrivate: Bool, blurIntensity: Double, privacyMode: PrivacyMode, customImage: NSImage?) {
+        guard let frame = frame else {
+            previewImageView.image = nil
+            return
+        }
+
+        var ciImage = CIImage(cvImageBuffer: frame)
+
+        if isPrivate {
+            switch privacyMode {
+            case .blur:
+                if let blurFilter = CIFilter(name: "CIGaussianBlur") {
+                    blurFilter.setValue(ciImage, forKey: kCIInputImageKey)
+                    blurFilter.setValue(blurIntensity, forKey: kCIInputRadiusKey)
+                    if let output = blurFilter.outputImage {
+                        ciImage = output.cropped(to: CIImage(cvImageBuffer: frame).extent)
+                    }
+                }
+            case .black:
+                previewImageView.image = NSImage(size: NSSize(width: 80, height: 50), flipped: false) { rect in
+                    NSColor.black.setFill()
+                    rect.fill()
+                    return true
+                }
+                return
+            case .image:
+                if let img = customImage {
+                    previewImageView.image = img
+                    return
+                }
+            }
+        }
+
+        if let cgImage = ciContext.createCGImage(ciImage, from: ciImage.extent) {
+            previewImageView.image = NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
         }
     }
 
@@ -1862,6 +1976,115 @@ class HUDWindow: NSWindow {
         }, completionHandler: {
             self.orderOut(nil)
         })
+    }
+}
+
+// MARK: - PiP Window
+
+class PiPWindow: NSWindow {
+    private let previewImageView = NSImageView()
+    private let ciContext = CIContext()
+    private var blurIntensity: Double = 50.0
+
+    init() {
+        // Default size with 16:10 aspect ratio
+        super.init(
+            contentRect: NSRect(x: 100, y: 100, width: 320, height: 200),
+            styleMask: [.titled, .closable, .resizable, .fullSizeContentView],
+            backing: .buffered,
+            defer: false
+        )
+
+        self.title = "Preview"
+        self.titlebarAppearsTransparent = true
+        self.titleVisibility = .hidden
+        self.isMovableByWindowBackground = true
+        self.level = .floating  // Float above other windows
+        self.isOpaque = false
+        self.backgroundColor = NSColor.black.withAlphaComponent(0.9)
+        self.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        self.sharingType = .none  // Hide from all screen capture
+        self.minSize = NSSize(width: 160, height: 100)
+        self.aspectRatio = NSSize(width: 16, height: 10)  // Lock aspect ratio
+
+        setupUI()
+        positionWindow()
+    }
+
+    private func setupUI() {
+        let containerView = NSView(frame: NSRect(x: 0, y: 0, width: 320, height: 200))
+        containerView.wantsLayer = true
+        containerView.layer?.backgroundColor = NSColor.black.cgColor
+
+        previewImageView.frame = containerView.bounds
+        previewImageView.autoresizingMask = [.width, .height]
+        previewImageView.imageScaling = .scaleProportionallyUpOrDown
+        containerView.addSubview(previewImageView)
+
+        contentView = containerView
+    }
+
+    private func positionWindow() {
+        // Position at bottom right corner
+        if let screen = NSScreen.main {
+            let x = screen.frame.width - frame.width - 20
+            let y: CGFloat = 80
+            setFrameOrigin(NSPoint(x: x, y: y))
+        }
+    }
+
+    func show() {
+        alphaValue = 0
+        orderFrontRegardless()
+
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.2
+            animator().alphaValue = 1.0
+        }
+    }
+
+    func hide() {
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = 0.2
+            animator().alphaValue = 0
+        }, completionHandler: {
+            self.orderOut(nil)
+        })
+    }
+
+    func updateFrame(_ frame: CVImageBuffer, isPrivacyEnabled: Bool, privacyMode: PrivacyMode, blurIntensity: Double = 50.0, customImage: NSImage? = nil) {
+        self.blurIntensity = blurIntensity
+
+        var ciImage = CIImage(cvImageBuffer: frame)
+
+        if isPrivacyEnabled {
+            switch privacyMode {
+            case .blur:
+                if let blurFilter = CIFilter(name: "CIGaussianBlur") {
+                    blurFilter.setValue(ciImage, forKey: kCIInputImageKey)
+                    blurFilter.setValue(blurIntensity, forKey: kCIInputRadiusKey)
+                    if let output = blurFilter.outputImage {
+                        ciImage = output.cropped(to: CIImage(cvImageBuffer: frame).extent)
+                    }
+                }
+            case .black:
+                previewImageView.image = NSImage(size: previewImageView.bounds.size, flipped: false) { rect in
+                    NSColor.black.setFill()
+                    rect.fill()
+                    return true
+                }
+                return
+            case .image:
+                if let img = customImage {
+                    previewImageView.image = img
+                    return
+                }
+            }
+        }
+
+        if let cgImage = ciContext.createCGImage(ciImage, from: ciImage.extent) {
+            previewImageView.image = NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
+        }
     }
 }
 
