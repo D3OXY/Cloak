@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.0] - 2024-12-21
+
+### Added
+- **Live settings panel**: Change privacy mode, blur intensity, and image while sharing
+- **Settings button**: New "Settings" button in hover controls during capture
+- **Scrollable settings**: Start screen content now scrolls to fit any window size
+
+### Changed
+- **Conditional settings UI**: Only shows relevant options for selected privacy mode (blur slider for Blur, image chooser for Image)
+- **Modernized UI**: Card-based layout with liquid glass effect backgrounds
+- **Cleaner controls**: Vibrancy-styled hover controls bar
+- **Compact design**: Streamlined settings with better spacing and typography
+
+### Fixed
+- **Content overflow**: Settings no longer clip or overflow on smaller windows
+
 ## [1.2.0] - 2024-12-21
 
 ### Added
@@ -63,6 +79,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| 1.3.0 | 2024-12-21 | Live settings panel, conditional UI, modernized design |
 | 1.2.0 | 2024-12-21 | Real-time blur, blur intensity slider, liquid glass HUD |
 | 1.1.0 | 2024-12-21 | App exclusion, self-hiding window, documentation |
 | 1.0.0 | 2024-12-21 | Initial release with privacy toggle, hotkeys, fullscreen |
