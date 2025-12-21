@@ -123,7 +123,22 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc func startCapture() {
         mainView.showCapturing()
-        captureEngine = ScreenCaptureEngine(previewView: mainView.previewView)
+
+        // Ensure HUD window exists so it can be excluded
+        if hudWindow == nil {
+            hudWindow = HUDWindow()
+        }
+
+        // Collect all windows to exclude from capture
+        var windowsToExclude: [NSWindow] = [window]
+        if let hud = hudWindow {
+            windowsToExclude.append(hud)
+        }
+
+        // Get excluded apps from settings
+        let excludedApps = mainView.startScreenView.getExcludedApps()
+
+        captureEngine = ScreenCaptureEngine(previewView: mainView.previewView, excludingWindows: windowsToExclude, excludingApps: excludedApps)
         captureEngine?.delegate = self
         captureEngine?.startCapture()
     }
@@ -414,7 +429,7 @@ class MainView: NSView {
         }
     }
 
-    private var startScreenView: StartScreenView!
+    private(set) var startScreenView: StartScreenView!
     var previewView: PreviewView!
     private var stopButton: NSButton!
     private var privacyButton: NSButton!
@@ -584,6 +599,11 @@ class StartScreenView: NSView {
     private var recordingAction: HotkeyAction?
     private var globalMonitor: Any?
 
+    // Excluded apps
+    private var excludedApps: [String] = []
+    private var excludedAppsStack: NSStackView!
+    private var appNameField: NSTextField!
+
     override init(frame: NSRect) {
         super.init(frame: frame)
         setupUI()
@@ -610,6 +630,20 @@ class StartScreenView: NSView {
             customImage = image
             imageWell.image = image
         }
+
+        // Load excluded apps
+        if let apps = UserDefaults.standard.stringArray(forKey: "excludedApps") {
+            excludedApps = apps
+        }
+    }
+
+    func getExcludedApps() -> [String] {
+        return excludedApps
+    }
+
+    private func saveExcludedApps() {
+        UserDefaults.standard.set(excludedApps, forKey: "excludedApps")
+        refreshExcludedAppsList()
     }
 
     func updateHotkeyLabels() {
@@ -692,6 +726,49 @@ class StartScreenView: NSView {
             let row = createHotkeyRow(for: action)
             contentStack.addArrangedSubview(row)
         }
+
+        // Excluded apps section
+        let excludeLabel = NSTextField(labelWithString: "Hide Apps from Capture")
+        excludeLabel.font = NSFont.systemFont(ofSize: 14, weight: .medium)
+        excludeLabel.textColor = .white
+        contentStack.addArrangedSubview(excludeLabel)
+
+        let excludeHint = NSTextField(labelWithString: "These apps will be invisible in the shared view")
+        excludeHint.font = NSFont.systemFont(ofSize: 11)
+        excludeHint.textColor = .secondaryLabelColor
+        contentStack.addArrangedSubview(excludeHint)
+
+        // Add app row
+        let addAppRow = NSView()
+        addAppRow.translatesAutoresizingMaskIntoConstraints = false
+
+        appNameField = NSTextField(frame: .zero)
+        appNameField.placeholderString = "App name (e.g., Slack)"
+        appNameField.translatesAutoresizingMaskIntoConstraints = false
+        addAppRow.addSubview(appNameField)
+
+        let addButton = NSButton(title: "Add", target: self, action: #selector(addExcludedApp))
+        addButton.bezelStyle = .rounded
+        addButton.translatesAutoresizingMaskIntoConstraints = false
+        addAppRow.addSubview(addButton)
+
+        NSLayoutConstraint.activate([
+            addAppRow.heightAnchor.constraint(equalToConstant: 30),
+            appNameField.leadingAnchor.constraint(equalTo: addAppRow.leadingAnchor),
+            appNameField.centerYAnchor.constraint(equalTo: addAppRow.centerYAnchor),
+            appNameField.widthAnchor.constraint(equalToConstant: 250),
+            addButton.leadingAnchor.constraint(equalTo: appNameField.trailingAnchor, constant: 10),
+            addButton.centerYAnchor.constraint(equalTo: addAppRow.centerYAnchor),
+            addButton.trailingAnchor.constraint(equalTo: addAppRow.trailingAnchor)
+        ])
+        contentStack.addArrangedSubview(addAppRow)
+
+        // List of excluded apps
+        excludedAppsStack = NSStackView()
+        excludedAppsStack.orientation = .vertical
+        excludedAppsStack.spacing = 5
+        excludedAppsStack.alignment = .leading
+        contentStack.addArrangedSubview(excludedAppsStack)
 
         // Start button
         let startButton = NSButton(title: "Start Sharing", target: self, action: #selector(startClicked))
@@ -779,11 +856,6 @@ class StartScreenView: NSView {
         return row
     }
 
-    override func viewDidMoveToWindow() {
-        super.viewDidMoveToWindow()
-        updateHotkeyLabels()
-    }
-
     @objc private func modeChanged() {
         switch modeSegmented.selectedSegment {
         case 0: selectedMode = .blur
@@ -859,6 +931,67 @@ class StartScreenView: NSView {
         updateHotkeyLabels()
     }
 
+    @objc private func addExcludedApp() {
+        let appName = appNameField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !appName.isEmpty else { return }
+        guard !excludedApps.contains(where: { $0.lowercased() == appName.lowercased() }) else { return }
+
+        excludedApps.append(appName)
+        appNameField.stringValue = ""
+        saveExcludedApps()
+    }
+
+    @objc private func removeExcludedApp(_ sender: NSButton) {
+        let index = sender.tag
+        guard index >= 0 && index < excludedApps.count else { return }
+
+        excludedApps.remove(at: index)
+        saveExcludedApps()
+    }
+
+    private func refreshExcludedAppsList() {
+        // Remove all existing rows
+        for view in excludedAppsStack.arrangedSubviews {
+            excludedAppsStack.removeArrangedSubview(view)
+            view.removeFromSuperview()
+        }
+
+        // Add rows for each excluded app
+        for (index, appName) in excludedApps.enumerated() {
+            let row = NSView()
+            row.translatesAutoresizingMaskIntoConstraints = false
+
+            let label = NSTextField(labelWithString: appName)
+            label.font = NSFont.systemFont(ofSize: 12)
+            label.textColor = .white
+            label.translatesAutoresizingMaskIntoConstraints = false
+            row.addSubview(label)
+
+            let removeButton = NSButton(title: "✕", target: self, action: #selector(removeExcludedApp(_:)))
+            removeButton.bezelStyle = .inline
+            removeButton.tag = index
+            removeButton.translatesAutoresizingMaskIntoConstraints = false
+            row.addSubview(removeButton)
+
+            NSLayoutConstraint.activate([
+                row.heightAnchor.constraint(equalToConstant: 24),
+                row.widthAnchor.constraint(equalToConstant: 300),
+                label.leadingAnchor.constraint(equalTo: row.leadingAnchor, constant: 10),
+                label.centerYAnchor.constraint(equalTo: row.centerYAnchor),
+                removeButton.trailingAnchor.constraint(equalTo: row.trailingAnchor),
+                removeButton.centerYAnchor.constraint(equalTo: row.centerYAnchor)
+            ])
+
+            excludedAppsStack.addArrangedSubview(row)
+        }
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        updateHotkeyLabels()
+        refreshExcludedAppsList()
+    }
+
     @objc private func startClicked() {
         onStart?()
     }
@@ -884,9 +1017,13 @@ class ScreenCaptureEngine: NSObject {
     var isPrivacyEnabled = false
     var currentPrivacyMode: PrivacyMode = .blur
     weak var delegate: ScreenCaptureEngineDelegate?
+    private var windowsToExclude: [NSWindow]
+    private var appNamesToExclude: [String]
 
-    init(previewView: PreviewView) {
+    init(previewView: PreviewView, excludingWindows: [NSWindow] = [], excludingApps: [String] = []) {
         self.previewView = previewView
+        self.windowsToExclude = excludingWindows
+        self.appNamesToExclude = excludingApps
         super.init()
         loadSettings()
     }
@@ -952,7 +1089,24 @@ class ScreenCaptureEngine: NSObject {
             throw NSError(domain: "ScreenCapture", code: -1, userInfo: [NSLocalizedDescriptionKey: "No display found"])
         }
 
-        let filter = SCContentFilter(display: display, excludingWindows: [])
+        // Find SCWindows matching the NSWindows we want to exclude
+        let windowIDsToExclude = windowsToExclude.compactMap { $0.windowNumber > 0 ? CGWindowID($0.windowNumber) : nil }
+        var scWindowsToExclude = content.windows.filter { windowIDsToExclude.contains($0.windowID) }
+
+        // Also exclude windows from apps by name (case-insensitive partial match)
+        let lowercasedAppNames = appNamesToExclude.map { $0.lowercased() }
+        for window in content.windows {
+            if let appName = window.owningApplication?.applicationName.lowercased() {
+                for excludeName in lowercasedAppNames {
+                    if appName.contains(excludeName) && !scWindowsToExclude.contains(where: { $0.windowID == window.windowID }) {
+                        scWindowsToExclude.append(window)
+                        break
+                    }
+                }
+            }
+        }
+
+        let filter = SCContentFilter(display: display, excludingWindows: scWindowsToExclude)
 
         let streamConfig = SCStreamConfiguration()
         streamConfig.width = Int(display.width)
