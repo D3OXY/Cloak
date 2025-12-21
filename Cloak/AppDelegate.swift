@@ -40,8 +40,17 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     func updateStatusBarIcon(isPrivate: Bool) {
         if let button = statusItem.button {
-            button.image = NSImage(systemSymbolName: isPrivate ? "eye.slash.fill" : "eye.fill",
-                                  accessibilityDescription: "Cloak")
+            let symbolName = isPrivate ? "eye.slash.fill" : "eye.fill"
+            if let image = NSImage(systemSymbolName: symbolName, accessibilityDescription: "Cloak") {
+                if isPrivate {
+                    // Bright green when privacy is ON
+                    let config = NSImage.SymbolConfiguration(paletteColors: [.systemGreen])
+                    button.image = image.withSymbolConfiguration(config)
+                } else {
+                    // Default color when privacy is OFF
+                    button.image = image
+                }
+            }
         }
     }
 
@@ -416,7 +425,8 @@ class HotkeyManager {
             var hotKeyID = EventHotKeyID()
             GetEventParameter(event, EventParamName(kEventParamDirectObject), EventParamType(typeEventHotKeyID), nil, MemoryLayout<EventHotKeyID>.size, nil, &hotKeyID)
 
-            DispatchQueue.main.async {
+            // Use high priority for immediate response
+            DispatchQueue.main.async(qos: .userInteractive) {
                 if let appDelegate = NSApp.delegate as? AppDelegate {
                     if let action = HotkeyAction(rawValue: Int(hotKeyID.id)) {
                         appDelegate.hotkeyManager.delegate?.hotkeyDidTrigger(action: action)
@@ -1545,8 +1555,12 @@ class ScreenCaptureEngine: NSObject {
 
     func togglePrivacy() {
         isPrivacyEnabled.toggle()
+        // Update preview immediately (no async delay)
+        previewView.isPrivacyEnabled = isPrivacyEnabled
+        previewView.privacyMode = currentPrivacyMode
+        previewView.needsDisplay = true
+        // Notify delegate
         delegate?.privacyStateDidChange(isPrivate: isPrivacyEnabled)
-        updatePreview()
     }
 
     private func updatePreview() {
@@ -1732,11 +1746,11 @@ class HUDWindow: NSWindow {
             defer: false
         )
 
-        self.level = .floating
+        self.level = .screenSaver  // Show above fullscreen apps
         self.isOpaque = false
         self.backgroundColor = .clear
         self.ignoresMouseEvents = true
-        self.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        self.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
         self.sharingType = .none  // Hide from all screen capture
 
         setupUI()

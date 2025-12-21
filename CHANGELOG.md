@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.3] - 2024-12-21
+
+### Fixed
+- **HUD above fullscreen**: Privacy HUD now displays on top of fullscreen apps
+- **Faster hotkey response**: Optimized toggle performance, especially from fullscreen apps
+
+### Changed
+- **Green menu bar icon**: Status bar icon now turns bright green when privacy is ON
+- **HUD window level**: Uses screenSaver level to ensure visibility above all apps
+
 ## [1.3.2] - 2024-12-21
 
 ### Changed
@@ -98,6 +108,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| 1.3.3 | 2024-12-21 | HUD above fullscreen, green menu icon, faster hotkeys |
 | 1.3.2 | 2024-12-21 | Dynamic aspect ratio, smart visibility (hidden until sharing) |
 | 1.3.1 | 2024-12-21 | Fix window sharing visibility, self-hide toggle |
 | 1.3.0 | 2024-12-21 | Live settings panel, conditional UI, modernized design |
