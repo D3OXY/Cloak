@@ -1416,7 +1416,7 @@ class ScreenCaptureEngine: NSObject {
     private var windowsToExclude: [NSWindow]
     private var appNamesToExclude: [String]
     private var currentDisplay: SCDisplay?
-    private var refreshTimer: Timer?
+    private var workspaceObservers: [NSObjectProtocol] = []
 
     init(previewView: PreviewView, excludingWindows: [NSWindow] = [], excludingApps: [String] = []) {
         self.previewView = previewView
@@ -1424,6 +1424,52 @@ class ScreenCaptureEngine: NSObject {
         self.appNamesToExclude = excludingApps
         super.init()
         loadSettings()
+        setupWorkspaceObservers()
+    }
+
+    private func setupWorkspaceObservers() {
+        let center = NSWorkspace.shared.notificationCenter
+
+        // Observe app launches - refresh filter when any app launches
+        let launchObserver = center.addObserver(
+            forName: NSWorkspace.didLaunchApplicationNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] notification in
+            // Small delay to let the window appear
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                self?.refreshExcludedApps()
+            }
+        }
+        workspaceObservers.append(launchObserver)
+
+        // Also observe when apps become active (window might appear)
+        let activateObserver = center.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.refreshExcludedApps()
+        }
+        workspaceObservers.append(activateObserver)
+
+        // Observe when windows might have changed
+        let unhideObserver = center.addObserver(
+            forName: NSWorkspace.didUnhideApplicationNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.refreshExcludedApps()
+        }
+        workspaceObservers.append(unhideObserver)
+    }
+
+    private func removeWorkspaceObservers() {
+        let center = NSWorkspace.shared.notificationCenter
+        for observer in workspaceObservers {
+            center.removeObserver(observer)
+        }
+        workspaceObservers.removeAll()
     }
 
     func loadSettings() {
@@ -1460,8 +1506,7 @@ class ScreenCaptureEngine: NSObject {
     }
 
     func stopCapture() {
-        refreshTimer?.invalidate()
-        refreshTimer = nil
+        removeWorkspaceObservers()
         Task {
             try? await stream?.stopCapture()
             stream = nil
@@ -1508,13 +1553,6 @@ class ScreenCaptureEngine: NSObject {
 
         try stream?.addStreamOutput(self, type: .screen, sampleHandlerQueue: .main)
         try await stream?.startCapture()
-
-        // Start periodic refresh to catch new windows from excluded apps
-        DispatchQueue.main.async {
-            self.refreshTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
-                self?.refreshExcludedApps()
-            }
-        }
     }
 
     private func buildContentFilter(display: SCDisplay) async throws -> SCContentFilter {
