@@ -14,6 +14,25 @@ Cloak is a macOS app that creates a shareable window for video calls. Instead of
 - **Fullscreen Support**: Use Cloak in fullscreen for a cleaner look
 - **Hover Controls**: Stop/Privacy buttons appear only when you hover over the window
 
+## Download
+
+Download the latest version from the [Releases page](../../releases).
+
+### First Launch
+
+Since Cloak is not signed with an Apple Developer certificate, macOS will block it on first launch:
+
+1. Open **Applications** folder
+2. **Right-click** on **Cloak** → Select **Open**
+3. Click **Open** in the dialog
+
+You only need to do this once.
+
+Alternatively, run in Terminal:
+```bash
+xattr -cr /Applications/Cloak.app
+```
+
 ## Installation
 
 ### Requirements
@@ -24,7 +43,7 @@ Cloak is a macOS app that creates a shareable window for video calls. Instead of
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/yourusername/Cloak.git
+   git clone https://github.com/d3oxy/Cloak.git
    cd Cloak
    ```
 
@@ -34,6 +53,8 @@ Cloak is a macOS app that creates a shareable window for video calls. Instead of
    ```
 
 3. Build and run (Cmd+R)
+
+See [DISTRIBUTION.md](DISTRIBUTION.md) for creating releases.
 
 ## Usage
 
