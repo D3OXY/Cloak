@@ -91,7 +91,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         window.minSize = NSSize(width: 800, height: 500)
         window.isReleasedWhenClosed = false
         window.collectionBehavior = [.fullScreenPrimary]
-        window.sharingType = .none  // Hide from all screen capture
+        // Note: Don't use sharingType = .none here - it would hide from Google Meet/Zoom too!
+        // Instead, we exclude from our own capture via SCContentFilter
 
         mainView = MainView(frame: windowRect)
         mainView.delegate = self
@@ -131,15 +132,19 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             hudWindow = HUDWindow()
         }
 
-        // Collect all windows to exclude from capture
-        var windowsToExclude: [NSWindow] = [window]
-        if let hud = hudWindow {
-            windowsToExclude.append(hud)
-        }
-
         // Get settings from start screen
         let excludedApps = mainView.startScreenView.getExcludedApps()
         let blurIntensity = mainView.startScreenView.getBlurIntensity()
+        let hideSelfFromPreview = mainView.startScreenView.getHideSelfFromPreview()
+
+        // Collect windows to exclude from capture (only if self-hiding is enabled)
+        var windowsToExclude: [NSWindow] = []
+        if hideSelfFromPreview {
+            windowsToExclude.append(window)
+            if let hud = hudWindow {
+                windowsToExclude.append(hud)
+            }
+        }
 
         // Set blur intensity on preview view
         mainView.previewView.blurIntensity = blurIntensity
@@ -241,9 +246,10 @@ extension AppDelegate: MainViewSettingsDelegate {
         // Reload settings from UserDefaults
         engine.loadSettings()
 
-        // Update blur intensity on preview view
-        let blurIntensity = mainView.startScreenView.getBlurIntensity()
-        mainView.previewView.blurIntensity = blurIntensity
+        // Update blur intensity from UserDefaults (may come from SettingsPanel or StartScreen)
+        if UserDefaults.standard.object(forKey: "blurIntensity") != nil {
+            mainView.previewView.blurIntensity = UserDefaults.standard.double(forKey: "blurIntensity")
+        }
 
         // Update custom image if changed
         if let imagePath = UserDefaults.standard.string(forKey: "customImagePath"),
@@ -728,6 +734,10 @@ class StartScreenView: NSView {
     private var excludedAppsStack: NSStackView!
     private var appNameField: NSTextField!
 
+    // Self-hiding toggle
+    private var hideSelfFromPreview: Bool = true
+    private var hideSelfToggle: NSButton!
+
     // Scroll view
     private var scrollView: NSScrollView!
 
@@ -768,6 +778,11 @@ class StartScreenView: NSView {
             excludedApps = apps
         }
 
+        // Load self-hiding preference (default true)
+        if UserDefaults.standard.object(forKey: "hideSelfFromPreview") != nil {
+            hideSelfFromPreview = UserDefaults.standard.bool(forKey: "hideSelfFromPreview")
+        }
+
         // Update visibility based on loaded mode
         updateModeSettingsVisibility()
     }
@@ -786,6 +801,10 @@ class StartScreenView: NSView {
 
     func getCustomImage() -> NSImage? {
         return customImage
+    }
+
+    func getHideSelfFromPreview() -> Bool {
+        return hideSelfFromPreview
     }
 
     private func saveExcludedApps() {
@@ -1021,13 +1040,36 @@ class StartScreenView: NSView {
         excludeStack.translatesAutoresizingMaskIntoConstraints = false
         excludeCard.addSubview(excludeStack)
 
-        let excludeHeader = createSectionHeader("Hide Apps from Capture")
+        let excludeHeader = createSectionHeader("Hide from Preview")
         excludeStack.addArrangedSubview(excludeHeader)
 
-        let excludeHint = NSTextField(labelWithString: "These apps will be invisible in the shared view")
-        excludeHint.font = NSFont.systemFont(ofSize: 11)
-        excludeHint.textColor = .tertiaryLabelColor
-        excludeStack.addArrangedSubview(excludeHint)
+        // Self-hiding toggle row
+        let selfHideRow = NSView()
+        selfHideRow.translatesAutoresizingMaskIntoConstraints = false
+
+        hideSelfToggle = NSButton(checkboxWithTitle: "Hide Cloak window from its own preview", target: self, action: #selector(hideSelfToggleChanged))
+        hideSelfToggle.state = hideSelfFromPreview ? .on : .off
+        hideSelfToggle.font = NSFont.systemFont(ofSize: 12)
+        hideSelfToggle.translatesAutoresizingMaskIntoConstraints = false
+        selfHideRow.addSubview(hideSelfToggle)
+
+        NSLayoutConstraint.activate([
+            selfHideRow.heightAnchor.constraint(equalToConstant: 20),
+            hideSelfToggle.leadingAnchor.constraint(equalTo: selfHideRow.leadingAnchor),
+            hideSelfToggle.centerYAnchor.constraint(equalTo: selfHideRow.centerYAnchor)
+        ])
+        excludeStack.addArrangedSubview(selfHideRow)
+
+        // Separator
+        let separator = NSBox()
+        separator.boxType = .separator
+        separator.translatesAutoresizingMaskIntoConstraints = false
+        excludeStack.addArrangedSubview(separator)
+
+        let excludeAppsLabel = NSTextField(labelWithString: "Hide other apps:")
+        excludeAppsLabel.font = NSFont.systemFont(ofSize: 12, weight: .medium)
+        excludeAppsLabel.textColor = .secondaryLabelColor
+        excludeStack.addArrangedSubview(excludeAppsLabel)
 
         // Add app row
         let addAppRow = NSView()
@@ -1244,6 +1286,12 @@ class StartScreenView: NSView {
         updateHotkeyLabels()
     }
 
+    @objc private func hideSelfToggleChanged() {
+        hideSelfFromPreview = hideSelfToggle.state == .on
+        UserDefaults.standard.set(hideSelfFromPreview, forKey: "hideSelfFromPreview")
+        onSettingsChanged?()
+    }
+
     @objc private func addExcludedApp() {
         let appName = appNameField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !appName.isEmpty else { return }
@@ -1306,6 +1354,8 @@ class StartScreenView: NSView {
         // Update blur slider from loaded settings
         blurSlider?.doubleValue = blurIntensity
         blurValueLabel?.stringValue = "\(Int(blurIntensity))"
+        // Update self-hide toggle
+        hideSelfToggle?.state = hideSelfFromPreview ? .on : .off
     }
 
     @objc private func startClicked() {
@@ -1766,6 +1816,9 @@ class SettingsPanel: NSVisualEffectView {
     private let imageWell = NSImageView()
     private var customImage: NSImage?
 
+    // Self-hiding (display only, requires restart to take effect)
+    private var hideSelfFromPreview: Bool = true
+
     override init(frame: NSRect) {
         super.init(frame: frame)
         setupPanel()
@@ -1804,6 +1857,7 @@ class SettingsPanel: NSVisualEffectView {
         selectedMode = startScreen.getSelectedMode()
         blurIntensity = startScreen.getBlurIntensity()
         customImage = startScreen.getCustomImage()
+        hideSelfFromPreview = startScreen.getHideSelfFromPreview()
 
         switch selectedMode {
         case .blur: modeSegmented.selectedSegment = 0

@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.1] - 2024-12-21
+
+### Fixed
+- **Window visible in screen share**: Cloak window is now visible when shared in Google Meet/Zoom (previously was completely hidden)
+- **Self-hiding toggle**: Added option to hide/show Cloak window from its own preview (on by default)
+- **Live blur intensity**: Blur slider now updates in real-time while sharing
+
+### Changed
+- Self-hiding now uses SCContentFilter exclusion instead of sharingType (only hides from own capture, not external apps)
+
 ## [1.3.0] - 2024-12-21
 
 ### Added
@@ -79,6 +89,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| 1.3.1 | 2024-12-21 | Fix window sharing visibility, self-hide toggle |
 | 1.3.0 | 2024-12-21 | Live settings panel, conditional UI, modernized design |
 | 1.2.0 | 2024-12-21 | Real-time blur, blur intensity slider, liquid glass HUD |
 | 1.1.0 | 2024-12-21 | App exclusion, self-hiding window, documentation |
