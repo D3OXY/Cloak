@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.1] - 2024-12-22
+
+### Fixed
+- **HUD/PiP above fullscreen**: Both windows now properly display above fullscreen apps
+- **HUD layout**: Improved alignment with vertically centered preview and icon+label group
+
+### Changed
+- PiP window uses `.screenSaver` level and `.stationary` collection behavior
+- HUD icon now appears above centered label text for cleaner look
+
 ## [1.4.0] - 2024-12-22
 
 ### Added
@@ -139,6 +149,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| 1.4.1 | 2024-12-22 | Fix HUD/PiP above fullscreen, improved HUD layout |
 | 1.4.0 | 2024-12-22 | Picture-in-Picture preview, PiP hotkey, HUD preview thumbnail |
 | 1.3.4 | 2024-12-21 | Instant app hiding, event-driven detection, zero idle CPU |
 | 1.3.3 | 2024-12-21 | HUD above fullscreen, green menu icon, faster hotkeys |
