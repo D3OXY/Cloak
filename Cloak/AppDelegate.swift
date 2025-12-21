@@ -95,6 +95,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         mainView = MainView(frame: windowRect)
         mainView.delegate = self
+        mainView.settingsDelegate = self
         mainView.hotkeyManager = hotkeyManager
         window.contentView = mainView
 
@@ -229,6 +230,29 @@ extension AppDelegate: HotkeyManagerDelegate {
         case .toggleFullscreen:
             toggleFullScreen()
         }
+    }
+}
+
+extension AppDelegate: MainViewSettingsDelegate {
+    func mainViewDidChangeSettings() {
+        // Apply live settings changes to the capture engine
+        guard let engine = captureEngine else { return }
+
+        // Reload settings from UserDefaults
+        engine.loadSettings()
+
+        // Update blur intensity on preview view
+        let blurIntensity = mainView.startScreenView.getBlurIntensity()
+        mainView.previewView.blurIntensity = blurIntensity
+
+        // Update custom image if changed
+        if let imagePath = UserDefaults.standard.string(forKey: "customImagePath"),
+           let image = NSImage(contentsOfFile: imagePath) {
+            mainView.previewView.customImage = image
+        }
+
+        // Force redraw
+        mainView.previewView.needsDisplay = true
     }
 }
 
@@ -426,11 +450,17 @@ protocol MainViewDelegate: AnyObject {
     func mainViewDidRequestFullscreen()
 }
 
+protocol MainViewSettingsDelegate: AnyObject {
+    func mainViewDidChangeSettings()
+}
+
 class MainView: NSView {
     weak var delegate: MainViewDelegate?
+    weak var settingsDelegate: MainViewSettingsDelegate?
     weak var hotkeyManager: HotkeyManager? {
         didSet {
             startScreenView?.hotkeyManager = hotkeyManager
+            settingsPanel?.hotkeyManager = hotkeyManager
         }
     }
 
@@ -439,8 +469,13 @@ class MainView: NSView {
     private var stopButton: NSButton!
     private var privacyButton: NSButton!
     private var fullscreenButton: NSButton!
-    private var controlsContainer: NSView!
+    private var settingsButton: NSButton!
+    private var controlsContainer: NSVisualEffectView!
     private var trackingArea: NSTrackingArea?
+
+    // Settings panel for live editing
+    private var settingsPanel: SettingsPanel?
+    private var settingsPanelVisible = false
 
     private var isCapturing = false
 
@@ -463,6 +498,9 @@ class MainView: NSView {
         startScreenView.onStart = { [weak self] in
             self?.delegate?.mainViewDidRequestStart()
         }
+        startScreenView.onSettingsChanged = { [weak self] in
+            self?.settingsDelegate?.mainViewDidChangeSettings()
+        }
         addSubview(startScreenView)
 
         // Preview view (hidden initially)
@@ -473,18 +511,24 @@ class MainView: NSView {
 
         // Controls container (shown on hover during capture)
         setupControls()
+
+        // Settings panel (for live editing during capture)
+        setupSettingsPanel()
     }
 
     private func setupControls() {
-        controlsContainer = NSView(frame: NSRect(x: 0, y: 0, width: 310, height: 50))
+        controlsContainer = NSVisualEffectView(frame: NSRect(x: 0, y: 0, width: 380, height: 50))
+        controlsContainer.material = .hudWindow
+        controlsContainer.state = .active
+        controlsContainer.blendingMode = .behindWindow
         controlsContainer.wantsLayer = true
-        controlsContainer.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.7).cgColor
         controlsContainer.layer?.cornerRadius = 12
+        controlsContainer.layer?.masksToBounds = true
         controlsContainer.isHidden = true
         addSubview(controlsContainer)
 
         // Stop button
-        stopButton = NSButton(frame: NSRect(x: 10, y: 10, width: 80, height: 30))
+        stopButton = NSButton(frame: NSRect(x: 12, y: 10, width: 70, height: 30))
         stopButton.title = "Stop"
         stopButton.bezelStyle = .rounded
         stopButton.target = self
@@ -493,20 +537,71 @@ class MainView: NSView {
         controlsContainer.addSubview(stopButton)
 
         // Privacy toggle button
-        privacyButton = NSButton(frame: NSRect(x: 100, y: 10, width: 90, height: 30))
+        privacyButton = NSButton(frame: NSRect(x: 90, y: 10, width: 80, height: 30))
         privacyButton.title = "Privacy"
         privacyButton.bezelStyle = .rounded
         privacyButton.target = self
         privacyButton.action = #selector(privacyClicked)
         controlsContainer.addSubview(privacyButton)
 
+        // Settings button
+        settingsButton = NSButton(frame: NSRect(x: 178, y: 10, width: 90, height: 30))
+        settingsButton.title = "Settings"
+        settingsButton.bezelStyle = .rounded
+        settingsButton.target = self
+        settingsButton.action = #selector(settingsClicked)
+        controlsContainer.addSubview(settingsButton)
+
         // Fullscreen button
-        fullscreenButton = NSButton(frame: NSRect(x: 200, y: 10, width: 100, height: 30))
+        fullscreenButton = NSButton(frame: NSRect(x: 276, y: 10, width: 92, height: 30))
         fullscreenButton.title = "Fullscreen"
         fullscreenButton.bezelStyle = .rounded
         fullscreenButton.target = self
         fullscreenButton.action = #selector(fullscreenClicked)
         controlsContainer.addSubview(fullscreenButton)
+    }
+
+    private func setupSettingsPanel() {
+        settingsPanel = SettingsPanel(frame: NSRect(x: 0, y: 0, width: 320, height: 200))
+        settingsPanel?.isHidden = true
+        settingsPanel?.onSettingsChanged = { [weak self] in
+            self?.settingsDelegate?.mainViewDidChangeSettings()
+        }
+        settingsPanel?.onClose = { [weak self] in
+            self?.hideSettingsPanel()
+        }
+        addSubview(settingsPanel!)
+    }
+
+    func showSettingsPanel() {
+        guard let panel = settingsPanel else { return }
+        panel.syncFromStartScreen(startScreenView)
+        panel.frame = NSRect(
+            x: (bounds.width - 320) / 2,
+            y: (bounds.height - 200) / 2,
+            width: 320,
+            height: 200
+        )
+        panel.isHidden = false
+        panel.alphaValue = 0
+        settingsPanelVisible = true
+
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.2
+            panel.animator().alphaValue = 1
+        }
+    }
+
+    func hideSettingsPanel() {
+        guard let panel = settingsPanel else { return }
+        settingsPanelVisible = false
+
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = 0.2
+            panel.animator().alphaValue = 0
+        }, completionHandler: {
+            panel.isHidden = true
+        })
     }
 
     override func updateTrackingAreas() {
@@ -539,9 +634,9 @@ class MainView: NSView {
 
     private func showControls() {
         controlsContainer.frame = NSRect(
-            x: (bounds.width - 310) / 2,
+            x: (bounds.width - 380) / 2,
             y: 20,
-            width: 310,
+            width: 380,
             height: 50
         )
         controlsContainer.isHidden = false
@@ -554,11 +649,16 @@ class MainView: NSView {
     }
 
     private func hideControls() {
+        // Don't hide controls if settings panel is visible
+        if settingsPanelVisible { return }
+
         NSAnimationContext.runAnimationGroup({ context in
             context.duration = 0.2
             controlsContainer.animator().alphaValue = 0
         }, completionHandler: {
-            self.controlsContainer.isHidden = true
+            if !self.settingsPanelVisible {
+                self.controlsContainer.isHidden = true
+            }
         })
     }
 
@@ -573,6 +673,7 @@ class MainView: NSView {
         startScreenView.isHidden = false
         previewView.isHidden = true
         controlsContainer.isHidden = true
+        hideSettingsPanel()
         previewView.reset()
     }
 
@@ -582,6 +683,14 @@ class MainView: NSView {
 
     @objc private func privacyClicked() {
         delegate?.mainViewDidRequestTogglePrivacy()
+    }
+
+    @objc private func settingsClicked() {
+        if settingsPanelVisible {
+            hideSettingsPanel()
+        } else {
+            showSettingsPanel()
+        }
     }
 
     @objc private func fullscreenClicked() {
@@ -594,6 +703,7 @@ class MainView: NSView {
 class StartScreenView: NSView {
     var onStart: (() -> Void)?
     weak var hotkeyManager: HotkeyManager?
+    var onSettingsChanged: (() -> Void)?  // Callback when settings change during sharing
 
     private let modeSegmented = NSSegmentedControl()
     private let imageWell = NSImageView()
@@ -604,6 +714,10 @@ class StartScreenView: NSView {
     private var recordingAction: HotkeyAction?
     private var globalMonitor: Any?
 
+    // Mode-specific containers
+    private var blurSettingsContainer: NSView!
+    private var imageSettingsContainer: NSView!
+
     // Blur intensity
     private var blurIntensity: Double = 50.0
     private var blurSlider: NSSlider!
@@ -613,6 +727,9 @@ class StartScreenView: NSView {
     private var excludedApps: [String] = []
     private var excludedAppsStack: NSStackView!
     private var appNameField: NSTextField!
+
+    // Scroll view
+    private var scrollView: NSScrollView!
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -650,6 +767,9 @@ class StartScreenView: NSView {
         if let apps = UserDefaults.standard.stringArray(forKey: "excludedApps") {
             excludedApps = apps
         }
+
+        // Update visibility based on loaded mode
+        updateModeSettingsVisibility()
     }
 
     func getExcludedApps() -> [String] {
@@ -658,6 +778,14 @@ class StartScreenView: NSView {
 
     func getBlurIntensity() -> Double {
         return blurIntensity
+    }
+
+    func getSelectedMode() -> PrivacyMode {
+        return selectedMode
+    }
+
+    func getCustomImage() -> NSImage? {
+        return customImage
     }
 
     private func saveExcludedApps() {
@@ -677,120 +805,229 @@ class StartScreenView: NSView {
         }
     }
 
+    private func updateModeSettingsVisibility() {
+        blurSettingsContainer?.isHidden = selectedMode != .blur
+        imageSettingsContainer?.isHidden = selectedMode != .image
+    }
+
+    private func createSectionHeader(_ title: String) -> NSTextField {
+        let label = NSTextField(labelWithString: title)
+        label.font = NSFont.systemFont(ofSize: 13, weight: .semibold)
+        label.textColor = .white
+        return label
+    }
+
+    private func createCard() -> NSVisualEffectView {
+        let card = NSVisualEffectView()
+        card.material = .hudWindow
+        card.state = .active
+        card.blendingMode = .withinWindow
+        card.wantsLayer = true
+        card.layer?.cornerRadius = 12
+        card.layer?.masksToBounds = true
+        card.translatesAutoresizingMaskIntoConstraints = false
+        return card
+    }
+
     private func setupUI() {
         wantsLayer = true
-        layer?.backgroundColor = NSColor(white: 0.1, alpha: 1).cgColor
+        layer?.backgroundColor = NSColor(white: 0.08, alpha: 1).cgColor
+
+        // Header area (fixed at top)
+        let headerView = NSView()
+        headerView.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(headerView)
 
         // Title
         let titleLabel = NSTextField(labelWithString: "Cloak")
-        titleLabel.font = NSFont.systemFont(ofSize: 48, weight: .bold)
+        titleLabel.font = NSFont.systemFont(ofSize: 36, weight: .bold)
         titleLabel.textColor = .white
         titleLabel.alignment = .center
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(titleLabel)
+        headerView.addSubview(titleLabel)
 
         // Subtitle
         let subtitleLabel = NSTextField(labelWithString: "Hide your screen during video calls")
-        subtitleLabel.font = NSFont.systemFont(ofSize: 18, weight: .regular)
+        subtitleLabel.font = NSFont.systemFont(ofSize: 14, weight: .regular)
         subtitleLabel.textColor = .secondaryLabelColor
         subtitleLabel.alignment = .center
         subtitleLabel.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(subtitleLabel)
+        headerView.addSubview(subtitleLabel)
 
-        // Create a scroll view for content
+        NSLayoutConstraint.activate([
+            headerView.topAnchor.constraint(equalTo: topAnchor),
+            headerView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            headerView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            headerView.heightAnchor.constraint(equalToConstant: 90),
+
+            titleLabel.centerXAnchor.constraint(equalTo: headerView.centerXAnchor),
+            titleLabel.topAnchor.constraint(equalTo: headerView.topAnchor, constant: 20),
+
+            subtitleLabel.centerXAnchor.constraint(equalTo: headerView.centerXAnchor),
+            subtitleLabel.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 4)
+        ])
+
+        // Scroll view for content
+        scrollView = NSScrollView()
+        scrollView.translatesAutoresizingMaskIntoConstraints = false
+        scrollView.hasVerticalScroller = true
+        scrollView.hasHorizontalScroller = false
+        scrollView.autohidesScrollers = true
+        scrollView.drawsBackground = false
+        scrollView.borderType = .noBorder
+        addSubview(scrollView)
+
+        // Content stack inside scroll view
         let contentStack = NSStackView()
         contentStack.orientation = .vertical
-        contentStack.spacing = 15
+        contentStack.spacing = 16
+        contentStack.alignment = .centerX
         contentStack.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(contentStack)
 
-        // Privacy mode section
-        let modeLabel = NSTextField(labelWithString: "Privacy Mode")
-        modeLabel.font = NSFont.systemFont(ofSize: 14, weight: .medium)
-        modeLabel.textColor = .white
-        contentStack.addArrangedSubview(modeLabel)
+        // Document view for scroll
+        let documentView = NSView()
+        documentView.translatesAutoresizingMaskIntoConstraints = false
+        documentView.addSubview(contentStack)
+        scrollView.documentView = documentView
+
+        // === Privacy Mode Card ===
+        let modeCard = createCard()
+        let modeStack = NSStackView()
+        modeStack.orientation = .vertical
+        modeStack.spacing = 12
+        modeStack.translatesAutoresizingMaskIntoConstraints = false
+        modeCard.addSubview(modeStack)
+
+        let modeHeader = createSectionHeader("Privacy Mode")
+        modeStack.addArrangedSubview(modeHeader)
 
         modeSegmented.segmentCount = 3
         modeSegmented.setLabel("Blur", forSegment: 0)
         modeSegmented.setLabel("Image", forSegment: 1)
         modeSegmented.setLabel("Black", forSegment: 2)
         modeSegmented.selectedSegment = 0
+        modeSegmented.segmentStyle = .automatic
         modeSegmented.target = self
         modeSegmented.action = #selector(modeChanged)
-        contentStack.addArrangedSubview(modeSegmented)
+        modeStack.addArrangedSubview(modeSegmented)
 
-        // Blur intensity slider
-        let blurRow = NSView()
-        blurRow.translatesAutoresizingMaskIntoConstraints = false
+        // Blur settings container
+        blurSettingsContainer = NSView()
+        blurSettingsContainer.translatesAutoresizingMaskIntoConstraints = false
 
         let blurLabel = NSTextField(labelWithString: "Blur Intensity")
         blurLabel.font = NSFont.systemFont(ofSize: 12)
         blurLabel.textColor = .secondaryLabelColor
         blurLabel.translatesAutoresizingMaskIntoConstraints = false
-        blurRow.addSubview(blurLabel)
+        blurSettingsContainer.addSubview(blurLabel)
 
         blurSlider = NSSlider(value: blurIntensity, minValue: 5, maxValue: 100, target: self, action: #selector(blurSliderChanged))
         blurSlider.translatesAutoresizingMaskIntoConstraints = false
-        blurRow.addSubview(blurSlider)
+        blurSettingsContainer.addSubview(blurSlider)
 
         blurValueLabel = NSTextField(labelWithString: "\(Int(blurIntensity))")
-        blurValueLabel.font = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .regular)
-        blurValueLabel.textColor = .secondaryLabelColor
+        blurValueLabel.font = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .medium)
+        blurValueLabel.textColor = .white
         blurValueLabel.alignment = .right
         blurValueLabel.translatesAutoresizingMaskIntoConstraints = false
-        blurRow.addSubview(blurValueLabel)
+        blurSettingsContainer.addSubview(blurValueLabel)
 
         NSLayoutConstraint.activate([
-            blurRow.heightAnchor.constraint(equalToConstant: 24),
-            blurLabel.leadingAnchor.constraint(equalTo: blurRow.leadingAnchor),
-            blurLabel.centerYAnchor.constraint(equalTo: blurRow.centerYAnchor),
-            blurLabel.widthAnchor.constraint(equalToConstant: 90),
-            blurSlider.leadingAnchor.constraint(equalTo: blurLabel.trailingAnchor, constant: 8),
-            blurSlider.centerYAnchor.constraint(equalTo: blurRow.centerYAnchor),
+            blurSettingsContainer.heightAnchor.constraint(equalToConstant: 28),
+            blurLabel.leadingAnchor.constraint(equalTo: blurSettingsContainer.leadingAnchor),
+            blurLabel.centerYAnchor.constraint(equalTo: blurSettingsContainer.centerYAnchor),
+            blurSlider.leadingAnchor.constraint(equalTo: blurLabel.trailingAnchor, constant: 12),
+            blurSlider.centerYAnchor.constraint(equalTo: blurSettingsContainer.centerYAnchor),
+            blurSlider.widthAnchor.constraint(equalToConstant: 160),
             blurValueLabel.leadingAnchor.constraint(equalTo: blurSlider.trailingAnchor, constant: 8),
-            blurValueLabel.trailingAnchor.constraint(equalTo: blurRow.trailingAnchor),
-            blurValueLabel.centerYAnchor.constraint(equalTo: blurRow.centerYAnchor),
-            blurValueLabel.widthAnchor.constraint(equalToConstant: 35)
+            blurValueLabel.trailingAnchor.constraint(equalTo: blurSettingsContainer.trailingAnchor),
+            blurValueLabel.centerYAnchor.constraint(equalTo: blurSettingsContainer.centerYAnchor),
+            blurValueLabel.widthAnchor.constraint(equalToConstant: 30)
         ])
-        contentStack.addArrangedSubview(blurRow)
+        modeStack.addArrangedSubview(blurSettingsContainer)
 
-        // Image well
+        // Image settings container
+        imageSettingsContainer = NSView()
+        imageSettingsContainer.translatesAutoresizingMaskIntoConstraints = false
+        imageSettingsContainer.isHidden = true
+
+        let imageStack = NSStackView()
+        imageStack.orientation = .vertical
+        imageStack.spacing = 8
+        imageStack.translatesAutoresizingMaskIntoConstraints = false
+        imageSettingsContainer.addSubview(imageStack)
+
         imageWell.wantsLayer = true
-        imageWell.layer?.backgroundColor = NSColor.darkGray.withAlphaComponent(0.3).cgColor
+        imageWell.layer?.backgroundColor = NSColor.white.withAlphaComponent(0.05).cgColor
         imageWell.layer?.cornerRadius = 8
-        imageWell.layer?.borderWidth = 2
-        imageWell.layer?.borderColor = NSColor.gray.withAlphaComponent(0.5).cgColor
+        imageWell.layer?.borderWidth = 1
+        imageWell.layer?.borderColor = NSColor.white.withAlphaComponent(0.1).cgColor
         imageWell.imageScaling = .scaleProportionallyUpOrDown
         imageWell.translatesAutoresizingMaskIntoConstraints = false
-        contentStack.addArrangedSubview(imageWell)
+        imageStack.addArrangedSubview(imageWell)
 
-        // Choose image button
         let chooseButton = NSButton(title: "Choose Image", target: self, action: #selector(chooseImage))
         chooseButton.bezelStyle = .rounded
-        contentStack.addArrangedSubview(chooseButton)
+        chooseButton.controlSize = .small
+        imageStack.addArrangedSubview(chooseButton)
 
-        // Hotkey section
-        let hotkeyLabel = NSTextField(labelWithString: "Keyboard Shortcuts")
-        hotkeyLabel.font = NSFont.systemFont(ofSize: 14, weight: .medium)
-        hotkeyLabel.textColor = .white
-        contentStack.addArrangedSubview(hotkeyLabel)
+        NSLayoutConstraint.activate([
+            imageStack.topAnchor.constraint(equalTo: imageSettingsContainer.topAnchor),
+            imageStack.leadingAnchor.constraint(equalTo: imageSettingsContainer.leadingAnchor),
+            imageStack.trailingAnchor.constraint(equalTo: imageSettingsContainer.trailingAnchor),
+            imageStack.bottomAnchor.constraint(equalTo: imageSettingsContainer.bottomAnchor),
+            imageWell.heightAnchor.constraint(equalToConstant: 60),
+            imageWell.widthAnchor.constraint(equalToConstant: 280)
+        ])
+        modeStack.addArrangedSubview(imageSettingsContainer)
 
-        // Create hotkey rows
+        NSLayoutConstraint.activate([
+            modeStack.topAnchor.constraint(equalTo: modeCard.topAnchor, constant: 16),
+            modeStack.leadingAnchor.constraint(equalTo: modeCard.leadingAnchor, constant: 16),
+            modeStack.trailingAnchor.constraint(equalTo: modeCard.trailingAnchor, constant: -16),
+            modeStack.bottomAnchor.constraint(equalTo: modeCard.bottomAnchor, constant: -16)
+        ])
+        contentStack.addArrangedSubview(modeCard)
+
+        // === Hotkeys Card ===
+        let hotkeyCard = createCard()
+        let hotkeyStack = NSStackView()
+        hotkeyStack.orientation = .vertical
+        hotkeyStack.spacing = 8
+        hotkeyStack.translatesAutoresizingMaskIntoConstraints = false
+        hotkeyCard.addSubview(hotkeyStack)
+
+        let hotkeyHeader = createSectionHeader("Keyboard Shortcuts")
+        hotkeyStack.addArrangedSubview(hotkeyHeader)
+
         for action in HotkeyAction.allCases {
             let row = createHotkeyRow(for: action)
-            contentStack.addArrangedSubview(row)
+            hotkeyStack.addArrangedSubview(row)
         }
 
-        // Excluded apps section
-        let excludeLabel = NSTextField(labelWithString: "Hide Apps from Capture")
-        excludeLabel.font = NSFont.systemFont(ofSize: 14, weight: .medium)
-        excludeLabel.textColor = .white
-        contentStack.addArrangedSubview(excludeLabel)
+        NSLayoutConstraint.activate([
+            hotkeyStack.topAnchor.constraint(equalTo: hotkeyCard.topAnchor, constant: 16),
+            hotkeyStack.leadingAnchor.constraint(equalTo: hotkeyCard.leadingAnchor, constant: 16),
+            hotkeyStack.trailingAnchor.constraint(equalTo: hotkeyCard.trailingAnchor, constant: -16),
+            hotkeyStack.bottomAnchor.constraint(equalTo: hotkeyCard.bottomAnchor, constant: -16)
+        ])
+        contentStack.addArrangedSubview(hotkeyCard)
+
+        // === Excluded Apps Card ===
+        let excludeCard = createCard()
+        let excludeStack = NSStackView()
+        excludeStack.orientation = .vertical
+        excludeStack.spacing = 8
+        excludeStack.translatesAutoresizingMaskIntoConstraints = false
+        excludeCard.addSubview(excludeStack)
+
+        let excludeHeader = createSectionHeader("Hide Apps from Capture")
+        excludeStack.addArrangedSubview(excludeHeader)
 
         let excludeHint = NSTextField(labelWithString: "These apps will be invisible in the shared view")
         excludeHint.font = NSFont.systemFont(ofSize: 11)
-        excludeHint.textColor = .secondaryLabelColor
-        contentStack.addArrangedSubview(excludeHint)
+        excludeHint.textColor = .tertiaryLabelColor
+        excludeStack.addArrangedSubview(excludeHint)
 
         // Add app row
         let addAppRow = NSView()
@@ -799,71 +1036,83 @@ class StartScreenView: NSView {
         appNameField = NSTextField(frame: .zero)
         appNameField.placeholderString = "App name (e.g., Slack)"
         appNameField.translatesAutoresizingMaskIntoConstraints = false
+        appNameField.controlSize = .small
+        appNameField.font = NSFont.systemFont(ofSize: 12)
         addAppRow.addSubview(appNameField)
 
         let addButton = NSButton(title: "Add", target: self, action: #selector(addExcludedApp))
         addButton.bezelStyle = .rounded
+        addButton.controlSize = .small
         addButton.translatesAutoresizingMaskIntoConstraints = false
         addAppRow.addSubview(addButton)
 
         NSLayoutConstraint.activate([
-            addAppRow.heightAnchor.constraint(equalToConstant: 30),
+            addAppRow.heightAnchor.constraint(equalToConstant: 24),
             appNameField.leadingAnchor.constraint(equalTo: addAppRow.leadingAnchor),
             appNameField.centerYAnchor.constraint(equalTo: addAppRow.centerYAnchor),
-            appNameField.widthAnchor.constraint(equalToConstant: 250),
-            addButton.leadingAnchor.constraint(equalTo: appNameField.trailingAnchor, constant: 10),
+            appNameField.widthAnchor.constraint(equalToConstant: 200),
+            addButton.leadingAnchor.constraint(equalTo: appNameField.trailingAnchor, constant: 8),
             addButton.centerYAnchor.constraint(equalTo: addAppRow.centerYAnchor),
             addButton.trailingAnchor.constraint(equalTo: addAppRow.trailingAnchor)
         ])
-        contentStack.addArrangedSubview(addAppRow)
+        excludeStack.addArrangedSubview(addAppRow)
 
-        // List of excluded apps
         excludedAppsStack = NSStackView()
         excludedAppsStack.orientation = .vertical
-        excludedAppsStack.spacing = 5
+        excludedAppsStack.spacing = 4
         excludedAppsStack.alignment = .leading
-        contentStack.addArrangedSubview(excludedAppsStack)
+        excludeStack.addArrangedSubview(excludedAppsStack)
 
-        // Start button
+        NSLayoutConstraint.activate([
+            excludeStack.topAnchor.constraint(equalTo: excludeCard.topAnchor, constant: 16),
+            excludeStack.leadingAnchor.constraint(equalTo: excludeCard.leadingAnchor, constant: 16),
+            excludeStack.trailingAnchor.constraint(equalTo: excludeCard.trailingAnchor, constant: -16),
+            excludeStack.bottomAnchor.constraint(equalTo: excludeCard.bottomAnchor, constant: -16)
+        ])
+        contentStack.addArrangedSubview(excludeCard)
+
+        // === Start Button ===
         let startButton = NSButton(title: "Start Sharing", target: self, action: #selector(startClicked))
         startButton.bezelStyle = .rounded
-        startButton.font = NSFont.systemFont(ofSize: 18, weight: .semibold)
+        startButton.font = NSFont.systemFont(ofSize: 16, weight: .semibold)
         startButton.contentTintColor = .systemGreen
         startButton.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(startButton)
+        contentStack.addArrangedSubview(startButton)
 
         // Instructions
-        let instructionsLabel = NSTextField(labelWithString: "1. Click 'Start Sharing'\n2. In Zoom/Meet, share the 'Cloak' window\n3. Use your hotkeys to toggle privacy")
-        instructionsLabel.font = NSFont.systemFont(ofSize: 13)
-        instructionsLabel.textColor = .secondaryLabelColor
+        let instructionsLabel = NSTextField(labelWithString: "Share the 'Cloak' window in Zoom/Meet, then use hotkeys to toggle privacy")
+        instructionsLabel.font = NSFont.systemFont(ofSize: 11)
+        instructionsLabel.textColor = .tertiaryLabelColor
         instructionsLabel.alignment = .center
-        instructionsLabel.maximumNumberOfLines = 0
+        instructionsLabel.maximumNumberOfLines = 2
         instructionsLabel.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(instructionsLabel)
+        contentStack.addArrangedSubview(instructionsLabel)
 
-        // Constraints
+        // Card width constraints
         NSLayoutConstraint.activate([
-            titleLabel.centerXAnchor.constraint(equalTo: centerXAnchor),
-            titleLabel.topAnchor.constraint(equalTo: topAnchor, constant: 40),
+            modeCard.widthAnchor.constraint(equalToConstant: 320),
+            hotkeyCard.widthAnchor.constraint(equalToConstant: 320),
+            excludeCard.widthAnchor.constraint(equalToConstant: 320),
+            startButton.widthAnchor.constraint(equalToConstant: 180),
+            startButton.heightAnchor.constraint(equalToConstant: 40),
+            instructionsLabel.widthAnchor.constraint(lessThanOrEqualToConstant: 300)
+        ])
 
-            subtitleLabel.centerXAnchor.constraint(equalTo: centerXAnchor),
-            subtitleLabel.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 8),
+        // Scroll view and content constraints
+        NSLayoutConstraint.activate([
+            scrollView.topAnchor.constraint(equalTo: headerView.bottomAnchor),
+            scrollView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            scrollView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            scrollView.bottomAnchor.constraint(equalTo: bottomAnchor),
 
-            contentStack.centerXAnchor.constraint(equalTo: centerXAnchor),
-            contentStack.topAnchor.constraint(equalTo: subtitleLabel.bottomAnchor, constant: 25),
-            contentStack.widthAnchor.constraint(equalToConstant: 350),
+            documentView.topAnchor.constraint(equalTo: scrollView.contentView.topAnchor),
+            documentView.leadingAnchor.constraint(equalTo: scrollView.contentView.leadingAnchor),
+            documentView.trailingAnchor.constraint(equalTo: scrollView.contentView.trailingAnchor),
+            documentView.widthAnchor.constraint(equalTo: scrollView.contentView.widthAnchor),
 
-            imageWell.heightAnchor.constraint(equalToConstant: 80),
-            imageWell.widthAnchor.constraint(equalToConstant: 350),
-
-            startButton.centerXAnchor.constraint(equalTo: centerXAnchor),
-            startButton.topAnchor.constraint(equalTo: contentStack.bottomAnchor, constant: 25),
-            startButton.widthAnchor.constraint(equalToConstant: 200),
-            startButton.heightAnchor.constraint(equalToConstant: 44),
-
-            instructionsLabel.centerXAnchor.constraint(equalTo: centerXAnchor),
-            instructionsLabel.topAnchor.constraint(equalTo: startButton.bottomAnchor, constant: 20),
-            instructionsLabel.widthAnchor.constraint(lessThanOrEqualToConstant: 400)
+            contentStack.topAnchor.constraint(equalTo: documentView.topAnchor, constant: 12),
+            contentStack.centerXAnchor.constraint(equalTo: documentView.centerXAnchor),
+            contentStack.bottomAnchor.constraint(equalTo: documentView.bottomAnchor, constant: -20)
         ])
     }
 
@@ -918,12 +1167,15 @@ class StartScreenView: NSView {
         default: selectedMode = .blur
         }
         UserDefaults.standard.set(selectedMode.rawValue, forKey: "privacyMode")
+        updateModeSettingsVisibility()
+        onSettingsChanged?()
     }
 
     @objc private func blurSliderChanged() {
         blurIntensity = blurSlider.doubleValue
         blurValueLabel.stringValue = "\(Int(blurIntensity))"
         UserDefaults.standard.set(blurIntensity, forKey: "blurIntensity")
+        onSettingsChanged?()
     }
 
     @objc private func chooseImage() {
@@ -936,6 +1188,7 @@ class StartScreenView: NSView {
                 self?.customImage = image
                 self?.imageWell.image = image
                 UserDefaults.standard.set(url.path, forKey: "customImagePath")
+                self?.onSettingsChanged?()
             }
         }
     }
@@ -1487,5 +1740,209 @@ class HUDWindow: NSWindow {
         }, completionHandler: {
             self.orderOut(nil)
         })
+    }
+}
+
+// MARK: - Settings Panel (for live settings during capture)
+
+class SettingsPanel: NSVisualEffectView {
+    var onSettingsChanged: (() -> Void)?
+    var onClose: (() -> Void)?
+    weak var hotkeyManager: HotkeyManager?
+
+    private let modeSegmented = NSSegmentedControl()
+    private var selectedMode: PrivacyMode = .blur
+
+    // Mode-specific containers
+    private var blurSettingsContainer: NSView!
+    private var imageSettingsContainer: NSView!
+
+    // Blur settings
+    private var blurIntensity: Double = 50.0
+    private var blurSlider: NSSlider!
+    private var blurValueLabel: NSTextField!
+
+    // Image settings
+    private let imageWell = NSImageView()
+    private var customImage: NSImage?
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        setupPanel()
+        loadSettings()
+    }
+
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    private func loadSettings() {
+        if let modeString = UserDefaults.standard.string(forKey: "privacyMode"),
+           let mode = PrivacyMode(rawValue: modeString) {
+            selectedMode = mode
+            switch mode {
+            case .blur: modeSegmented.selectedSegment = 0
+            case .image: modeSegmented.selectedSegment = 1
+            case .black: modeSegmented.selectedSegment = 2
+            }
+        }
+
+        if UserDefaults.standard.object(forKey: "blurIntensity") != nil {
+            blurIntensity = UserDefaults.standard.double(forKey: "blurIntensity")
+        }
+
+        if let imagePath = UserDefaults.standard.string(forKey: "customImagePath"),
+           let image = NSImage(contentsOfFile: imagePath) {
+            customImage = image
+            imageWell.image = image
+        }
+
+        updateModeSettingsVisibility()
+    }
+
+    func syncFromStartScreen(_ startScreen: StartScreenView) {
+        selectedMode = startScreen.getSelectedMode()
+        blurIntensity = startScreen.getBlurIntensity()
+        customImage = startScreen.getCustomImage()
+
+        switch selectedMode {
+        case .blur: modeSegmented.selectedSegment = 0
+        case .image: modeSegmented.selectedSegment = 1
+        case .black: modeSegmented.selectedSegment = 2
+        }
+
+        blurSlider?.doubleValue = blurIntensity
+        blurValueLabel?.stringValue = "\(Int(blurIntensity))"
+        imageWell.image = customImage
+
+        updateModeSettingsVisibility()
+    }
+
+    private func updateModeSettingsVisibility() {
+        blurSettingsContainer?.isHidden = selectedMode != .blur
+        imageSettingsContainer?.isHidden = selectedMode != .image
+    }
+
+    private func setupPanel() {
+        material = .hudWindow
+        state = .active
+        blendingMode = .behindWindow
+        wantsLayer = true
+        layer?.cornerRadius = 16
+        layer?.masksToBounds = true
+
+        // Close button
+        let closeButton = NSButton(frame: NSRect(x: 280, y: 164, width: 28, height: 28))
+        closeButton.image = NSImage(systemSymbolName: "xmark.circle.fill", accessibilityDescription: "Close")
+        closeButton.bezelStyle = .inline
+        closeButton.isBordered = false
+        closeButton.target = self
+        closeButton.action = #selector(closeClicked)
+        closeButton.contentTintColor = .secondaryLabelColor
+        addSubview(closeButton)
+
+        // Title
+        let titleLabel = NSTextField(labelWithString: "Settings")
+        titleLabel.font = NSFont.systemFont(ofSize: 14, weight: .semibold)
+        titleLabel.textColor = .white
+        titleLabel.frame = NSRect(x: 16, y: 164, width: 200, height: 20)
+        addSubview(titleLabel)
+
+        // Privacy Mode section
+        let modeLabel = NSTextField(labelWithString: "Privacy Mode")
+        modeLabel.font = NSFont.systemFont(ofSize: 12, weight: .medium)
+        modeLabel.textColor = .secondaryLabelColor
+        modeLabel.frame = NSRect(x: 16, y: 130, width: 100, height: 16)
+        addSubview(modeLabel)
+
+        modeSegmented.segmentCount = 3
+        modeSegmented.setLabel("Blur", forSegment: 0)
+        modeSegmented.setLabel("Image", forSegment: 1)
+        modeSegmented.setLabel("Black", forSegment: 2)
+        modeSegmented.selectedSegment = 0
+        modeSegmented.segmentStyle = .automatic
+        modeSegmented.target = self
+        modeSegmented.action = #selector(modeChanged)
+        modeSegmented.frame = NSRect(x: 16, y: 100, width: 288, height: 24)
+        addSubview(modeSegmented)
+
+        // Blur settings container
+        blurSettingsContainer = NSView(frame: NSRect(x: 16, y: 16, width: 288, height: 70))
+        addSubview(blurSettingsContainer)
+
+        let blurLabel = NSTextField(labelWithString: "Blur Intensity")
+        blurLabel.font = NSFont.systemFont(ofSize: 12)
+        blurLabel.textColor = .secondaryLabelColor
+        blurLabel.frame = NSRect(x: 0, y: 40, width: 90, height: 16)
+        blurSettingsContainer.addSubview(blurLabel)
+
+        blurSlider = NSSlider(value: blurIntensity, minValue: 5, maxValue: 100, target: self, action: #selector(blurSliderChanged))
+        blurSlider.frame = NSRect(x: 0, y: 10, width: 240, height: 20)
+        blurSettingsContainer.addSubview(blurSlider)
+
+        blurValueLabel = NSTextField(labelWithString: "\(Int(blurIntensity))")
+        blurValueLabel.font = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .medium)
+        blurValueLabel.textColor = .white
+        blurValueLabel.alignment = .right
+        blurValueLabel.frame = NSRect(x: 250, y: 10, width: 38, height: 20)
+        blurSettingsContainer.addSubview(blurValueLabel)
+
+        // Image settings container
+        imageSettingsContainer = NSView(frame: NSRect(x: 16, y: 16, width: 288, height: 70))
+        imageSettingsContainer.isHidden = true
+        addSubview(imageSettingsContainer)
+
+        imageWell.wantsLayer = true
+        imageWell.layer?.backgroundColor = NSColor.white.withAlphaComponent(0.05).cgColor
+        imageWell.layer?.cornerRadius = 6
+        imageWell.layer?.borderWidth = 1
+        imageWell.layer?.borderColor = NSColor.white.withAlphaComponent(0.1).cgColor
+        imageWell.imageScaling = .scaleProportionallyUpOrDown
+        imageWell.frame = NSRect(x: 0, y: 26, width: 200, height: 44)
+        imageSettingsContainer.addSubview(imageWell)
+
+        let chooseButton = NSButton(title: "Choose", target: self, action: #selector(chooseImage))
+        chooseButton.bezelStyle = .rounded
+        chooseButton.controlSize = .small
+        chooseButton.frame = NSRect(x: 210, y: 32, width: 78, height: 24)
+        imageSettingsContainer.addSubview(chooseButton)
+    }
+
+    @objc private func closeClicked() {
+        onClose?()
+    }
+
+    @objc private func modeChanged() {
+        switch modeSegmented.selectedSegment {
+        case 0: selectedMode = .blur
+        case 1: selectedMode = .image
+        case 2: selectedMode = .black
+        default: selectedMode = .blur
+        }
+        UserDefaults.standard.set(selectedMode.rawValue, forKey: "privacyMode")
+        updateModeSettingsVisibility()
+        onSettingsChanged?()
+    }
+
+    @objc private func blurSliderChanged() {
+        blurIntensity = blurSlider.doubleValue
+        blurValueLabel.stringValue = "\(Int(blurIntensity))"
+        UserDefaults.standard.set(blurIntensity, forKey: "blurIntensity")
+        onSettingsChanged?()
+    }
+
+    @objc private func chooseImage() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.image]
+        panel.allowsMultipleSelection = false
+
+        panel.begin { [weak self] response in
+            if response == .OK, let url = panel.url, let image = NSImage(contentsOf: url) {
+                self?.customImage = image
+                self?.imageWell.image = image
+                UserDefaults.standard.set(url.path, forKey: "customImagePath")
+                self?.onSettingsChanged?()
+            }
+        }
     }
 }
