@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.2] - 2024-12-21
+
+### Changed
+- **Dynamic aspect ratio**: Window now matches your screen's aspect ratio for optimal preview quality
+- **Locked aspect ratio**: Window maintains screen proportions when resizing
+- **Smart visibility**: Window is hidden from external screen capture until sharing starts
+  - Settings screen won't appear in Google Meet/Zoom
+  - Only the preview becomes visible after clicking "Start Sharing"
+
 ## [1.3.1] - 2024-12-21
 
 ### Fixed
@@ -89,6 +98,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| 1.3.2 | 2024-12-21 | Dynamic aspect ratio, smart visibility (hidden until sharing) |
 | 1.3.1 | 2024-12-21 | Fix window sharing visibility, self-hide toggle |
 | 1.3.0 | 2024-12-21 | Live settings panel, conditional UI, modernized design |
 | 1.2.0 | 2024-12-21 | Real-time blur, blur intensity slider, liquid glass HUD |

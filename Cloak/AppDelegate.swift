@@ -75,7 +75,15 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func setupMainWindow() {
-        let windowRect = NSRect(x: 100, y: 100, width: 1280, height: 720)
+        // Match the screen's aspect ratio for best preview quality
+        let screen = NSScreen.main ?? NSScreen.screens.first!
+        let screenSize = screen.frame.size
+        let aspectRatio = screenSize.width / screenSize.height
+
+        // Use 75% of screen height for good size, maintain aspect ratio
+        let windowHeight: CGFloat = min(900, screenSize.height * 0.75)
+        let windowWidth = windowHeight * aspectRatio
+        let windowRect = NSRect(x: 0, y: 0, width: windowWidth, height: windowHeight)
 
         window = NSWindow(
             contentRect: windowRect,
@@ -88,11 +96,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         window.titlebarAppearsTransparent = true
         window.titleVisibility = .hidden
         window.isMovableByWindowBackground = true
-        window.minSize = NSSize(width: 800, height: 500)
+        window.minSize = NSSize(width: 640, height: 400)
         window.isReleasedWhenClosed = false
         window.collectionBehavior = [.fullScreenPrimary]
-        // Note: Don't use sharingType = .none here - it would hide from Google Meet/Zoom too!
-        // Instead, we exclude from our own capture via SCContentFilter
+        window.aspectRatio = NSSize(width: aspectRatio, height: 1)  // Lock aspect ratio
+
+        // Hide from external screen capture until sharing starts
+        // This prevents Google Meet/Zoom from seeing the settings screen
+        window.sharingType = .none
 
         mainView = MainView(frame: windowRect)
         mainView.delegate = self
@@ -100,6 +111,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         mainView.hotkeyManager = hotkeyManager
         window.contentView = mainView
 
+        // Center the window on screen
+        window.center()
         window.makeKeyAndOrderFront(nil)
     }
 
@@ -126,6 +139,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc func startCapture() {
         mainView.showCapturing()
+
+        // Make window visible to external screen capture (Google Meet, Zoom, etc.)
+        window.sharingType = .readOnly
 
         // Ensure HUD window exists so it can be excluded
         if hudWindow == nil {
@@ -157,6 +173,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func stopCapture() {
         captureEngine?.stopCapture()
         captureEngine = nil
+
+        // Hide window from external screen capture again
+        window.sharingType = .none
+
         mainView.showStartScreen()
         updateStatusBarIcon(isPrivate: false)
     }
