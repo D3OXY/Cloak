@@ -214,16 +214,24 @@ extension AppDelegate: HotkeyManagerDelegate {
 
 // MARK: - Hotkey Manager
 
-enum HotkeyAction: String, CaseIterable {
-    case togglePrivacy = "togglePrivacy"
-    case startStopSharing = "startStopSharing"
-    case toggleFullscreen = "toggleFullscreen"
+enum HotkeyAction: Int, CaseIterable {
+    case togglePrivacy = 1
+    case startStopSharing = 2
+    case toggleFullscreen = 3
 
     var displayName: String {
         switch self {
         case .togglePrivacy: return "Toggle Privacy"
         case .startStopSharing: return "Start/Stop Sharing"
         case .toggleFullscreen: return "Toggle Fullscreen"
+        }
+    }
+
+    var storageKey: String {
+        switch self {
+        case .togglePrivacy: return "togglePrivacy"
+        case .startStopSharing: return "startStopSharing"
+        case .toggleFullscreen: return "toggleFullscreen"
         }
     }
 }
@@ -285,7 +293,7 @@ class HotkeyManager {
         if let data = UserDefaults.standard.data(forKey: "hotkeys"),
            let decoded = try? JSONDecoder().decode([String: HotkeyConfig].self, from: data) {
             for (key, config) in decoded {
-                if let action = HotkeyAction(rawValue: key) {
+                if let action = HotkeyAction.allCases.first(where: { $0.storageKey == key }) {
                     hotkeys[action] = config
                 }
             }
@@ -295,7 +303,7 @@ class HotkeyManager {
     func saveHotkeys() {
         var toSave: [String: HotkeyConfig] = [:]
         for (action, config) in hotkeys {
-            toSave[action.rawValue] = config
+            toSave[action.storageKey] = config
         }
         if let data = try? JSONEncoder().encode(toSave) {
             UserDefaults.standard.set(data, forKey: "hotkeys")
@@ -340,7 +348,7 @@ class HotkeyManager {
 
             DispatchQueue.main.async {
                 if let appDelegate = NSApp.delegate as? AppDelegate {
-                    if let action = HotkeyAction.allCases.first(where: { $0.hashValue == Int(hotKeyID.id) }) {
+                    if let action = HotkeyAction(rawValue: Int(hotKeyID.id)) {
                         appDelegate.hotkeyManager.delegate?.hotkeyDidTrigger(action: action)
                     }
                 }
@@ -360,7 +368,7 @@ class HotkeyManager {
         var hotKeyRef: EventHotKeyRef?
         var hotKeyID = EventHotKeyID()
         hotKeyID.signature = OSType(0x434C4B00) // "CLK\0"
-        hotKeyID.id = UInt32(action.hashValue)
+        hotKeyID.id = UInt32(action.rawValue)
 
         let status = RegisterEventHotKey(
             config.keyCode,
@@ -741,14 +749,14 @@ class StartScreenView: NSView {
         let button = NSButton(title: "Click to set", target: self, action: #selector(hotkeyButtonClicked(_:)))
         button.bezelStyle = .rounded
         button.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .medium)
-        button.tag = action.hashValue
+        button.tag = action.rawValue
         button.translatesAutoresizingMaskIntoConstraints = false
         row.addSubview(button)
         hotkeyButtons[action] = button
 
         let clearButton = NSButton(title: "✕", target: self, action: #selector(clearHotkeyClicked(_:)))
         clearButton.bezelStyle = .inline
-        clearButton.tag = action.hashValue
+        clearButton.tag = action.rawValue
         clearButton.translatesAutoresizingMaskIntoConstraints = false
         row.addSubview(clearButton)
 
@@ -801,7 +809,7 @@ class StartScreenView: NSView {
     }
 
     @objc private func hotkeyButtonClicked(_ sender: NSButton) {
-        guard let action = HotkeyAction.allCases.first(where: { $0.hashValue == sender.tag }) else { return }
+        guard let action = HotkeyAction(rawValue: sender.tag) else { return }
 
         // Cancel any existing recording
         stopRecording()
@@ -837,7 +845,7 @@ class StartScreenView: NSView {
     }
 
     @objc private func clearHotkeyClicked(_ sender: NSButton) {
-        guard let action = HotkeyAction.allCases.first(where: { $0.hashValue == sender.tag }) else { return }
+        guard let action = HotkeyAction(rawValue: sender.tag) else { return }
         hotkeyManager?.removeHotkey(for: action)
         updateHotkeyLabels()
     }
