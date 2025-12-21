@@ -10,9 +10,11 @@ Cloak is a macOS app that creates a shareable window for video calls. Instead of
 
 - **Privacy Toggle**: Instantly hide your screen with a global hotkey
 - **Multiple Privacy Modes**: Choose between blur pattern, custom image, or black screen
-- **Global Hotkey**: Works even when Cloak isn't the active app
+- **Global Hotkeys**: Work even when Cloak isn't the active app
 - **Fullscreen Support**: Use Cloak in fullscreen for a cleaner look
 - **Hover Controls**: Stop/Privacy buttons appear only when you hover over the window
+- **Self-Hiding**: Cloak window and controls are automatically hidden from the capture
+- **App Exclusion**: Hide specific apps from the shared screen (e.g., Slack, 1Password)
 
 ## Download
 
@@ -93,6 +95,22 @@ All hotkeys persist between app restarts.
 - **Image**: Shows a custom image you select
 - **Black**: Shows a completely black screen
 
+### Hiding Apps from Capture
+
+You can hide specific apps so they don't appear in the shared screen:
+
+1. On the start screen, find "Hide Apps from Capture"
+2. Type an app name (e.g., "Slack", "1Password", "Messages")
+3. Click "Add"
+4. The app's windows will be invisible in the captured screen
+
+This is useful for:
+- Hiding chat apps with sensitive messages
+- Hiding password managers
+- Hiding any app you don't want visible during screen sharing
+
+**Note**: The app name uses partial matching (case-insensitive). "slack" will match "Slack".
+
 ### Menu Bar
 
 Click the eye icon in your menu bar to:
@@ -141,3 +159,8 @@ MIT License - feel free to use and modify as needed.
 ## Contributing
 
 Contributions are welcome! Please feel free to submit a Pull Request.
+
+See also:
+- [DEVELOPMENT.md](DEVELOPMENT.md) - Development guide and code structure
+- [DISTRIBUTION.md](DISTRIBUTION.md) - Build and release instructions
+- [CHANGELOG.md](CHANGELOG.md) - Version history
