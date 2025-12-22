@@ -1598,7 +1598,7 @@ class ScreenCaptureEngine: NSObject {
     }
 
     func setupStream() async throws {
-        let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+        let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
 
         guard let display = content.displays.first else {
             throw NSError(domain: "ScreenCapture", code: -1, userInfo: [NSLocalizedDescriptionKey: "No display found"])
@@ -1621,7 +1621,8 @@ class ScreenCaptureEngine: NSObject {
     }
 
     private func buildContentFilter(display: SCDisplay) async throws -> SCContentFilter {
-        let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+        // Use onScreenWindowsOnly: false to include newly created windows
+        let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
 
         // Find SCWindows matching the NSWindows we want to exclude
         let windowIDsToExclude = windowsToExclude.compactMap { $0.windowNumber > 0 ? CGWindowID($0.windowNumber) : nil }
@@ -1926,7 +1927,7 @@ class HUDWindow: NSPanel {
             label.stringValue = "Privacy OFF"
         }
 
-        iconView.contentTintColor = isPrivate ? .systemRed : .systemGreen
+        iconView.contentTintColor = isPrivate ? .systemGreen : .systemRed
 
         // Update preview thumbnail
         updatePreviewThumbnail(frame: previewFrame, isPrivate: isPrivate, blurIntensity: blurIntensity, privacyMode: privacyMode, customImage: customImage)
@@ -2007,9 +2008,11 @@ class PiPWindow: NSPanel {
     private var blurIntensity: Double = 50.0
 
     init() {
-        // Default size with 16:10 aspect ratio
+        // Load saved frame or use default
+        let savedFrame = PiPWindow.loadSavedFrame()
+
         super.init(
-            contentRect: NSRect(x: 100, y: 100, width: 320, height: 200),
+            contentRect: savedFrame,
             styleMask: [.titled, .closable, .resizable, .fullSizeContentView, .nonactivatingPanel, .utilityWindow],
             backing: .buffered,
             defer: false
@@ -2034,7 +2037,50 @@ class PiPWindow: NSPanel {
         self.aspectRatio = NSSize(width: 16, height: 10)  // Lock aspect ratio
 
         setupUI()
-        positionWindow()
+
+        // Only position if no saved frame
+        if UserDefaults.standard.object(forKey: "pipWindowFrame") == nil {
+            positionWindow()
+        }
+
+        // Observe frame changes to save position/size
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(windowDidMove),
+            name: NSWindow.didMoveNotification,
+            object: self
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(windowDidResize),
+            name: NSWindow.didResizeNotification,
+            object: self
+        )
+    }
+
+    private static func loadSavedFrame() -> NSRect {
+        if let frameString = UserDefaults.standard.string(forKey: "pipWindowFrame") {
+            return NSRectFromString(frameString)
+        }
+        // Default: 320x200 at bottom right
+        return NSRect(x: 100, y: 100, width: 320, height: 200)
+    }
+
+    private func saveFrame() {
+        let frameString = NSStringFromRect(frame)
+        UserDefaults.standard.set(frameString, forKey: "pipWindowFrame")
+    }
+
+    @objc private func windowDidMove(_ notification: Notification) {
+        saveFrame()
+    }
+
+    @objc private func windowDidResize(_ notification: Notification) {
+        saveFrame()
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
     }
 
     private func setupUI() {
