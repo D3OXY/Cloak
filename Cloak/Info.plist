@@ -3,9 +3,9 @@
 <plist version="1.0">
 <dict>
 	<key>CFBundleShortVersionString</key>
-	<string>1.4.3</string>
+	<string>1.5.0</string>
 	<key>CFBundleVersion</key>
-	<string>12</string>
+	<string>13</string>
 	<key>NSScreenCaptureUsageDescription</key>
 	<string>Cloak needs to capture your screen to create a preview window that you can share.</string>
 </dict>

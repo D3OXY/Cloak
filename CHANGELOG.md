@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.0] - 2024-12-22
+
+### Added
+- **App icon**: Custom app icon with cloak/privacy theme
+- **PiP persistence**: Window position and size saved between restarts
+- **App icon guide**: `APP_ICON_GUIDE.md` with instructions for creating icons
+
+### Fixed
+- **HUD colors**: Privacy ON now shows green, Privacy OFF shows red
+- **App hiding**: Changed to `onScreenWindowsOnly: false` to detect newly created windows
+
 ## [1.4.3] - 2024-12-22
 
 ### Fixed
@@ -163,6 +174,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| 1.5.0 | 2024-12-22 | App icon, PiP persistence, HUD color fix |
 | 1.4.3 | 2024-12-22 | NSPanel for HUD/PiP, burst refresh for app hiding |
 | 1.4.2 | 2024-12-22 | Window level improvements |
 | 1.4.1 | 2024-12-22 | Improved HUD layout |
