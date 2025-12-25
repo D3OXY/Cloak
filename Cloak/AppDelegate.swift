@@ -1495,12 +1495,13 @@ class ScreenCaptureEngine: NSObject {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            // Burst of refreshes to catch window as soon as it appears
+            // Reduced refresh burst for battery efficiency (was 7 calls, now 3)
             self?.refreshExcludedApps()
-            for delay in [0.1, 0.2, 0.4, 0.7, 1.0, 1.5] {
-                DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
-                    self?.refreshExcludedApps()
-                }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+                self?.refreshExcludedApps()
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                self?.refreshExcludedApps()
             }
         }
         workspaceObservers.append(launchObserver)
@@ -1611,7 +1612,7 @@ class ScreenCaptureEngine: NSObject {
         let streamConfig = SCStreamConfiguration()
         streamConfig.width = Int(display.width)
         streamConfig.height = Int(display.height)
-        streamConfig.minimumFrameInterval = CMTime(value: 1, timescale: 30)
+        streamConfig.minimumFrameInterval = CMTime(value: 1, timescale: 15)  // 15 FPS for battery efficiency
         streamConfig.queueDepth = 5
 
         stream = SCStream(filter: filter, configuration: streamConfig, delegate: self)
@@ -1707,6 +1708,7 @@ class PreviewView: NSView {
     var customImage: NSImage?
     var blurIntensity: Double = 50.0  // 0-100 scale
     private let ciContext = CIContext()
+    private let blurFilter = CIFilter(name: "CIGaussianBlur")!  // Cached for performance
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -1745,8 +1747,7 @@ class PreviewView: NSView {
 
     private func drawScreenCapture(_ imageBuffer: CVImageBuffer, in context: CGContext) {
         let ciImage = CIImage(cvImageBuffer: imageBuffer)
-        let ciContext = CIContext()
-
+        // Use class-level ciContext instead of creating new one
         if let cgImage = ciContext.createCGImage(ciImage, from: ciImage.extent) {
             context.draw(cgImage, in: bounds)
         }
@@ -1759,21 +1760,19 @@ class PreviewView: NSView {
             context.fill(bounds)
 
         case .blur:
-            // Apply real-time Gaussian blur to the live frame
+            // Apply real-time Gaussian blur to the live frame using cached filter
             if let frameToBlur = currentFrame {
                 let ciImage = CIImage(cvImageBuffer: frameToBlur)
 
-                if let blurFilter = CIFilter(name: "CIGaussianBlur") {
-                    blurFilter.setValue(ciImage, forKey: kCIInputImageKey)
-                    blurFilter.setValue(blurIntensity, forKey: kCIInputRadiusKey)
+                blurFilter.setValue(ciImage, forKey: kCIInputImageKey)
+                blurFilter.setValue(blurIntensity, forKey: kCIInputRadiusKey)
 
-                    if let outputImage = blurFilter.outputImage {
-                        // Crop to original size (blur expands the image)
-                        let croppedImage = outputImage.cropped(to: ciImage.extent)
-                        if let blurredCGImage = ciContext.createCGImage(croppedImage, from: ciImage.extent) {
-                            context.draw(blurredCGImage, in: bounds)
-                            return
-                        }
+                if let outputImage = blurFilter.outputImage {
+                    // Crop to original size (blur expands the image)
+                    let croppedImage = outputImage.cropped(to: ciImage.extent)
+                    if let blurredCGImage = ciContext.createCGImage(croppedImage, from: ciImage.extent) {
+                        context.draw(blurredCGImage, in: bounds)
+                        return
                     }
                 }
             }
@@ -1845,6 +1844,7 @@ class HUDWindow: NSPanel {
     private let previewImageView = NSImageView()
     private var hideTimer: Timer?
     private let ciContext = CIContext()
+    private let blurFilter = CIFilter(name: "CIGaussianBlur")!  // Cached for performance
 
     init() {
         super.init(
@@ -1963,12 +1963,10 @@ class HUDWindow: NSPanel {
         if isPrivate {
             switch privacyMode {
             case .blur:
-                if let blurFilter = CIFilter(name: "CIGaussianBlur") {
-                    blurFilter.setValue(ciImage, forKey: kCIInputImageKey)
-                    blurFilter.setValue(blurIntensity, forKey: kCIInputRadiusKey)
-                    if let output = blurFilter.outputImage {
-                        ciImage = output.cropped(to: CIImage(cvImageBuffer: frame).extent)
-                    }
+                blurFilter.setValue(ciImage, forKey: kCIInputImageKey)
+                blurFilter.setValue(blurIntensity, forKey: kCIInputRadiusKey)
+                if let output = blurFilter.outputImage {
+                    ciImage = output.cropped(to: CIImage(cvImageBuffer: frame).extent)
                 }
             case .black:
                 previewImageView.image = NSImage(size: NSSize(width: 80, height: 50), flipped: false) { rect in
@@ -2005,7 +2003,9 @@ class HUDWindow: NSPanel {
 class PiPWindow: NSPanel {
     private let previewImageView = NSImageView()
     private let ciContext = CIContext()
+    private let blurFilter = CIFilter(name: "CIGaussianBlur")!  // Cached for performance
     private var blurIntensity: Double = 50.0
+    private var saveFrameWorkItem: DispatchWorkItem?  // For debouncing frame saves
 
     init() {
         // Load saved frame or use default
@@ -2071,12 +2071,21 @@ class PiPWindow: NSPanel {
         UserDefaults.standard.set(frameString, forKey: "pipWindowFrame")
     }
 
+    // Debounce saves to avoid writing on every pixel moved
+    private func debouncedSaveFrame() {
+        saveFrameWorkItem?.cancel()
+        saveFrameWorkItem = DispatchWorkItem { [weak self] in
+            self?.saveFrame()
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: saveFrameWorkItem!)
+    }
+
     @objc private func windowDidMove(_ notification: Notification) {
-        saveFrame()
+        debouncedSaveFrame()
     }
 
     @objc private func windowDidResize(_ notification: Notification) {
-        saveFrame()
+        debouncedSaveFrame()
     }
 
     deinit {
@@ -2132,12 +2141,10 @@ class PiPWindow: NSPanel {
         if isPrivacyEnabled {
             switch privacyMode {
             case .blur:
-                if let blurFilter = CIFilter(name: "CIGaussianBlur") {
-                    blurFilter.setValue(ciImage, forKey: kCIInputImageKey)
-                    blurFilter.setValue(blurIntensity, forKey: kCIInputRadiusKey)
-                    if let output = blurFilter.outputImage {
-                        ciImage = output.cropped(to: CIImage(cvImageBuffer: frame).extent)
-                    }
+                blurFilter.setValue(ciImage, forKey: kCIInputImageKey)
+                blurFilter.setValue(blurIntensity, forKey: kCIInputRadiusKey)
+                if let output = blurFilter.outputImage {
+                    ciImage = output.cropped(to: CIImage(cvImageBuffer: frame).extent)
                 }
             case .black:
                 previewImageView.image = NSImage(size: previewImageView.bounds.size, flipped: false) { rect in
