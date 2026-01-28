@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.2] - 2025-01-28
+
+### Added
+- **Multi-monitor support**: Choose which display to capture when multiple monitors are connected
+  - Display picker dropdown in settings (only visible with multiple displays)
+  - Shows display name, resolution, and "(Primary)" indicator
+  - Selection persists between restarts
+  - Can switch displays during active capture (via Settings panel)
+- **Display change detection**: Automatically refreshes display list when monitors are connected/disconnected
+
 ## [1.5.1] - 2024-12-22
 
 ### Performance (Battery Optimization)
@@ -185,6 +195,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| 1.5.2 | 2025-01-28 | Multi-monitor support, display picker, live display switching |
 | 1.5.1 | 2024-12-22 | Battery optimization (50-60% savings), 15 FPS, cached filters |
 | 1.5.0 | 2024-12-22 | App icon, PiP persistence, HUD color fix |
 | 1.4.3 | 2024-12-22 | NSPanel for HUD/PiP, burst refresh for app hiding |

@@ -3,6 +3,11 @@ import ScreenCaptureKit
 import AVFoundation
 import Carbon.HIToolbox
 
+// Notification for display configuration changes
+extension Notification.Name {
+    static let displaysDidChange = Notification.Name("displaysDidChange")
+}
+
 class AppDelegate: NSObject, NSApplicationDelegate {
     var window: NSWindow!
     var captureEngine: ScreenCaptureEngine?
@@ -20,11 +25,30 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         setupStatusBar()
         setupMainWindow()
         setupMenuBar()
+        setupDisplayChangeListener()
         NSApp.activate(ignoringOtherApps: true)
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         hotkeyManager.unregisterAllHotkeys()
+        removeDisplayChangeListener()
+    }
+
+    // MARK: - Display Change Handling
+
+    private func setupDisplayChangeListener() {
+        CGDisplayRegisterReconfigurationCallback({ displayID, flags, userInfo in
+            // Only respond to display add/remove events
+            if flags.contains(.addFlag) || flags.contains(.removeFlag) {
+                DispatchQueue.main.async {
+                    NotificationCenter.default.post(name: .displaysDidChange, object: nil)
+                }
+            }
+        }, nil)
+    }
+
+    private func removeDisplayChangeListener() {
+        CGDisplayRemoveReconfigurationCallback({ _, _, _ in }, nil)
     }
 
     func setupStatusBar() {
@@ -181,7 +205,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Set blur intensity on preview view
         mainView.previewView.blurIntensity = blurIntensity
 
-        captureEngine = ScreenCaptureEngine(previewView: mainView.previewView, excludingWindows: windowsToExclude, excludingApps: excludedApps)
+        // Get selected display ID
+        let selectedDisplayID = mainView.startScreenView.getSelectedDisplayID()
+
+        captureEngine = ScreenCaptureEngine(previewView: mainView.previewView, excludingWindows: windowsToExclude, excludingApps: excludedApps, displayID: selectedDisplayID)
         captureEngine?.delegate = self
         captureEngine?.startCapture()
     }
@@ -343,6 +370,22 @@ extension AppDelegate: MainViewSettingsDelegate {
 
         // Force redraw
         mainView.previewView.needsDisplay = true
+    }
+
+    func mainViewDidChangeDisplay(_ displayID: CGDirectDisplayID) {
+        // Stop current capture and restart with new display
+        guard captureEngine != nil else { return }
+
+        // Update the start screen's selection too
+        mainView.startScreenView.refreshDisplayList()
+
+        // Restart capture with new display
+        stopCapture()
+
+        // Small delay to ensure clean stop before restart
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in
+            self?.startCapture()
+        }
     }
 }
 
@@ -546,6 +589,7 @@ protocol MainViewDelegate: AnyObject {
 
 protocol MainViewSettingsDelegate: AnyObject {
     func mainViewDidChangeSettings()
+    func mainViewDidChangeDisplay(_ displayID: CGDirectDisplayID)
 }
 
 class MainView: NSView {
@@ -660,6 +704,9 @@ class MainView: NSView {
         settingsPanel?.isHidden = true
         settingsPanel?.onSettingsChanged = { [weak self] in
             self?.settingsDelegate?.mainViewDidChangeSettings()
+        }
+        settingsPanel?.onDisplayChanged = { [weak self] displayID in
+            self?.settingsDelegate?.mainViewDidChangeDisplay(displayID)
         }
         settingsPanel?.onClose = { [weak self] in
             self?.hideSettingsPanel()
@@ -826,6 +873,12 @@ class StartScreenView: NSView {
     private var hideSelfFromPreview: Bool = true
     private var hideSelfToggle: NSButton!
 
+    // Display selection
+    private var displayPopup: NSPopUpButton!
+    private var availableDisplays: [(id: CGDirectDisplayID, name: String)] = []
+    private var selectedDisplayID: CGDirectDisplayID = CGMainDisplayID()
+    private var displayCardContainer: NSView!
+
     // Scroll view
     private var scrollView: NSScrollView!
 
@@ -833,10 +886,28 @@ class StartScreenView: NSView {
         super.init(frame: frame)
         setupUI()
         loadSettings()
+        setupDisplayChangeObserver()
     }
 
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+
+    private func setupDisplayChangeObserver() {
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(displaysDidChange),
+            name: .displaysDidChange,
+            object: nil
+        )
+    }
+
+    @objc private func displaysDidChange() {
+        refreshDisplayList()
     }
 
     private func loadSettings() {
@@ -871,6 +942,13 @@ class StartScreenView: NSView {
             hideSelfFromPreview = UserDefaults.standard.bool(forKey: "hideSelfFromPreview")
         }
 
+        // Load selected display ID (default to main display)
+        if UserDefaults.standard.object(forKey: "selectedDisplayID") != nil {
+            selectedDisplayID = CGDirectDisplayID(UserDefaults.standard.integer(forKey: "selectedDisplayID"))
+        } else {
+            selectedDisplayID = CGMainDisplayID()
+        }
+
         // Update visibility based on loaded mode
         updateModeSettingsVisibility()
     }
@@ -893,6 +971,85 @@ class StartScreenView: NSView {
 
     func getHideSelfFromPreview() -> Bool {
         return hideSelfFromPreview
+    }
+
+    func getSelectedDisplayID() -> CGDirectDisplayID {
+        return selectedDisplayID
+    }
+
+    func refreshDisplayList() {
+        availableDisplays.removeAll()
+
+        // Get all active displays
+        var displayCount: UInt32 = 0
+        CGGetActiveDisplayList(0, nil, &displayCount)
+
+        if displayCount > 0 {
+            var displays = [CGDirectDisplayID](repeating: 0, count: Int(displayCount))
+            CGGetActiveDisplayList(displayCount, &displays, &displayCount)
+
+            for displayID in displays {
+                let name = getDisplayName(for: displayID)
+                availableDisplays.append((id: displayID, name: name))
+            }
+        }
+
+        // Update popup menu
+        updateDisplayPopup()
+    }
+
+    private func getDisplayName(for displayID: CGDirectDisplayID) -> String {
+        // Try to get display name from NSScreen
+        for screen in NSScreen.screens {
+            if let screenNumber = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID,
+               screenNumber == displayID {
+                let localizedName = screen.localizedName
+                let width = Int(screen.frame.width * (screen.backingScaleFactor))
+                let height = Int(screen.frame.height * (screen.backingScaleFactor))
+
+                // Check if this is the main display
+                let isMain = displayID == CGMainDisplayID()
+                let mainIndicator = isMain ? " (Primary)" : ""
+
+                return "\(localizedName) (\(width)×\(height))\(mainIndicator)"
+            }
+        }
+
+        // Fallback: use display ID
+        let isMain = displayID == CGMainDisplayID()
+        return "Display \(displayID)\(isMain ? " (Primary)" : "")"
+    }
+
+    private func updateDisplayPopup() {
+        guard let popup = displayPopup else { return }
+
+        popup.removeAllItems()
+
+        for display in availableDisplays {
+            popup.addItem(withTitle: display.name)
+            popup.lastItem?.tag = Int(display.id)
+        }
+
+        // Select the saved display, or fall back to main display
+        if let index = availableDisplays.firstIndex(where: { $0.id == selectedDisplayID }) {
+            popup.selectItem(at: index)
+        } else if let index = availableDisplays.firstIndex(where: { $0.id == CGMainDisplayID() }) {
+            popup.selectItem(at: index)
+            selectedDisplayID = CGMainDisplayID()
+            UserDefaults.standard.set(Int(selectedDisplayID), forKey: "selectedDisplayID")
+        }
+
+        // Show/hide display card based on number of displays
+        displayCardContainer?.isHidden = availableDisplays.count <= 1
+    }
+
+    @objc private func displayChanged() {
+        guard let popup = displayPopup,
+              let selectedItem = popup.selectedItem else { return }
+
+        selectedDisplayID = CGDirectDisplayID(selectedItem.tag)
+        UserDefaults.standard.set(Int(selectedDisplayID), forKey: "selectedDisplayID")
+        onSettingsChanged?()
     }
 
     private func saveExcludedApps() {
@@ -1095,6 +1252,46 @@ class StartScreenView: NSView {
             modeStack.bottomAnchor.constraint(equalTo: modeCard.bottomAnchor, constant: -16)
         ])
         contentStack.addArrangedSubview(modeCard)
+
+        // === Display Selection Card (hidden when only one display) ===
+        displayCardContainer = NSView()
+        displayCardContainer.translatesAutoresizingMaskIntoConstraints = false
+
+        let displayCard = createCard()
+        displayCardContainer.addSubview(displayCard)
+
+        let displayStack = NSStackView()
+        displayStack.orientation = .vertical
+        displayStack.spacing = 12
+        displayStack.translatesAutoresizingMaskIntoConstraints = false
+        displayCard.addSubview(displayStack)
+
+        let displayHeader = createSectionHeader("Display to Capture")
+        displayStack.addArrangedSubview(displayHeader)
+
+        displayPopup = NSPopUpButton(frame: .zero, pullsDown: false)
+        displayPopup.translatesAutoresizingMaskIntoConstraints = false
+        displayPopup.target = self
+        displayPopup.action = #selector(displayChanged)
+        displayStack.addArrangedSubview(displayPopup)
+
+        NSLayoutConstraint.activate([
+            displayCard.topAnchor.constraint(equalTo: displayCardContainer.topAnchor),
+            displayCard.leadingAnchor.constraint(equalTo: displayCardContainer.leadingAnchor),
+            displayCard.trailingAnchor.constraint(equalTo: displayCardContainer.trailingAnchor),
+            displayCard.bottomAnchor.constraint(equalTo: displayCardContainer.bottomAnchor),
+
+            displayStack.topAnchor.constraint(equalTo: displayCard.topAnchor, constant: 16),
+            displayStack.leadingAnchor.constraint(equalTo: displayCard.leadingAnchor, constant: 16),
+            displayStack.trailingAnchor.constraint(equalTo: displayCard.trailingAnchor, constant: -16),
+            displayStack.bottomAnchor.constraint(equalTo: displayCard.bottomAnchor, constant: -16),
+
+            displayCardContainer.widthAnchor.constraint(equalToConstant: 320)
+        ])
+        contentStack.addArrangedSubview(displayCardContainer)
+
+        // Refresh display list
+        refreshDisplayList()
 
         // === Hotkeys Card ===
         let hotkeyCard = createCard()
@@ -1439,6 +1636,7 @@ class StartScreenView: NSView {
         super.viewDidMoveToWindow()
         updateHotkeyLabels()
         refreshExcludedAppsList()
+        refreshDisplayList()
         // Update blur slider from loaded settings
         blurSlider?.doubleValue = blurIntensity
         blurValueLabel?.stringValue = "\(Int(blurIntensity))"
@@ -1475,12 +1673,14 @@ class ScreenCaptureEngine: NSObject {
     private var windowsToExclude: [NSWindow]
     private var appNamesToExclude: [String]
     private var currentDisplay: SCDisplay?
+    private var selectedDisplayID: CGDirectDisplayID
     private var workspaceObservers: [NSObjectProtocol] = []
 
-    init(previewView: PreviewView, excludingWindows: [NSWindow] = [], excludingApps: [String] = []) {
+    init(previewView: PreviewView, excludingWindows: [NSWindow] = [], excludingApps: [String] = [], displayID: CGDirectDisplayID = CGMainDisplayID()) {
         self.previewView = previewView
         self.windowsToExclude = excludingWindows
         self.appNamesToExclude = excludingApps
+        self.selectedDisplayID = displayID
         super.init()
         loadSettings()
         setupWorkspaceObservers()
@@ -1601,17 +1801,33 @@ class ScreenCaptureEngine: NSObject {
     func setupStream() async throws {
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
 
-        guard let display = content.displays.first else {
+        // Find the selected display, fall back to main display, then first available
+        var display: SCDisplay?
+
+        // Try to find the selected display
+        display = content.displays.first { $0.displayID == selectedDisplayID }
+
+        // Fall back to main display if selected not found
+        if display == nil {
+            display = content.displays.first { $0.displayID == CGMainDisplayID() }
+        }
+
+        // Final fallback to first available display
+        if display == nil {
+            display = content.displays.first
+        }
+
+        guard let selectedDisplay = display else {
             throw NSError(domain: "ScreenCapture", code: -1, userInfo: [NSLocalizedDescriptionKey: "No display found"])
         }
 
-        currentDisplay = display
+        currentDisplay = selectedDisplay
 
-        let filter = try await buildContentFilter(display: display)
+        let filter = try await buildContentFilter(display: selectedDisplay)
 
         let streamConfig = SCStreamConfiguration()
-        streamConfig.width = Int(display.width)
-        streamConfig.height = Int(display.height)
+        streamConfig.width = Int(selectedDisplay.width)
+        streamConfig.height = Int(selectedDisplay.height)
         streamConfig.minimumFrameInterval = CMTime(value: 1, timescale: 15)  // 15 FPS for battery efficiency
         streamConfig.queueDepth = 5
 
@@ -2171,6 +2387,7 @@ class PiPWindow: NSPanel {
 
 class SettingsPanel: NSVisualEffectView {
     var onSettingsChanged: (() -> Void)?
+    var onDisplayChanged: ((CGDirectDisplayID) -> Void)?
     var onClose: (() -> Void)?
     weak var hotkeyManager: HotkeyManager?
 
@@ -2193,14 +2410,38 @@ class SettingsPanel: NSVisualEffectView {
     // Self-hiding (display only, requires restart to take effect)
     private var hideSelfFromPreview: Bool = true
 
+    // Display selection
+    private var displayPopup: NSPopUpButton!
+    private var availableDisplays: [(id: CGDirectDisplayID, name: String)] = []
+    private var selectedDisplayID: CGDirectDisplayID = CGMainDisplayID()
+    private var displayContainer: NSView!
+
     override init(frame: NSRect) {
         super.init(frame: frame)
         setupPanel()
         loadSettings()
+        setupDisplayChangeObserver()
     }
 
     required init?(coder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+
+    private func setupDisplayChangeObserver() {
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(displaysDidChange),
+            name: .displaysDidChange,
+            object: nil
+        )
+    }
+
+    @objc private func displaysDidChange() {
+        refreshDisplayList()
     }
 
     private func loadSettings() {
@@ -2232,6 +2473,7 @@ class SettingsPanel: NSVisualEffectView {
         blurIntensity = startScreen.getBlurIntensity()
         customImage = startScreen.getCustomImage()
         hideSelfFromPreview = startScreen.getHideSelfFromPreview()
+        selectedDisplayID = startScreen.getSelectedDisplayID()
 
         switch selectedMode {
         case .blur: modeSegmented.selectedSegment = 0
@@ -2243,7 +2485,79 @@ class SettingsPanel: NSVisualEffectView {
         blurValueLabel?.stringValue = "\(Int(blurIntensity))"
         imageWell.image = customImage
 
+        refreshDisplayList()
         updateModeSettingsVisibility()
+    }
+
+    func refreshDisplayList() {
+        availableDisplays.removeAll()
+
+        // Get all active displays
+        var displayCount: UInt32 = 0
+        CGGetActiveDisplayList(0, nil, &displayCount)
+
+        if displayCount > 0 {
+            var displays = [CGDirectDisplayID](repeating: 0, count: Int(displayCount))
+            CGGetActiveDisplayList(displayCount, &displays, &displayCount)
+
+            for displayID in displays {
+                let name = getDisplayName(for: displayID)
+                availableDisplays.append((id: displayID, name: name))
+            }
+        }
+
+        // Update popup menu
+        updateDisplayPopup()
+    }
+
+    private func getDisplayName(for displayID: CGDirectDisplayID) -> String {
+        for screen in NSScreen.screens {
+            if let screenNumber = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID,
+               screenNumber == displayID {
+                let localizedName = screen.localizedName
+                let width = Int(screen.frame.width * screen.backingScaleFactor)
+                let height = Int(screen.frame.height * screen.backingScaleFactor)
+                let isMain = displayID == CGMainDisplayID()
+                let mainIndicator = isMain ? " (Primary)" : ""
+                return "\(localizedName) (\(width)×\(height))\(mainIndicator)"
+            }
+        }
+        let isMain = displayID == CGMainDisplayID()
+        return "Display \(displayID)\(isMain ? " (Primary)" : "")"
+    }
+
+    private func updateDisplayPopup() {
+        guard let popup = displayPopup else { return }
+
+        popup.removeAllItems()
+
+        for display in availableDisplays {
+            popup.addItem(withTitle: display.name)
+            popup.lastItem?.tag = Int(display.id)
+        }
+
+        // Select the saved display
+        if let index = availableDisplays.firstIndex(where: { $0.id == selectedDisplayID }) {
+            popup.selectItem(at: index)
+        } else if let index = availableDisplays.firstIndex(where: { $0.id == CGMainDisplayID() }) {
+            popup.selectItem(at: index)
+            selectedDisplayID = CGMainDisplayID()
+        }
+
+        // Show/hide display container based on number of displays
+        displayContainer?.isHidden = availableDisplays.count <= 1
+    }
+
+    @objc private func displayChanged() {
+        guard let popup = displayPopup,
+              let selectedItem = popup.selectedItem else { return }
+
+        let newDisplayID = CGDirectDisplayID(selectedItem.tag)
+        if newDisplayID != selectedDisplayID {
+            selectedDisplayID = newDisplayID
+            UserDefaults.standard.set(Int(selectedDisplayID), forKey: "selectedDisplayID")
+            onDisplayChanged?(selectedDisplayID)
+        }
     }
 
     private func updateModeSettingsVisibility() {
@@ -2334,6 +2648,31 @@ class SettingsPanel: NSVisualEffectView {
         chooseButton.controlSize = .small
         chooseButton.frame = NSRect(x: 210, y: 32, width: 78, height: 24)
         imageSettingsContainer.addSubview(chooseButton)
+
+        // Display selection (shown only when multiple displays)
+        displayContainer = NSView(frame: NSRect(x: 16, y: 56, width: 288, height: 40))
+        displayContainer.isHidden = true
+        addSubview(displayContainer)
+
+        let displayLabel = NSTextField(labelWithString: "Display")
+        displayLabel.font = NSFont.systemFont(ofSize: 12, weight: .medium)
+        displayLabel.textColor = .secondaryLabelColor
+        displayLabel.frame = NSRect(x: 0, y: 20, width: 60, height: 16)
+        displayContainer.addSubview(displayLabel)
+
+        displayPopup = NSPopUpButton(frame: NSRect(x: 0, y: -4, width: 288, height: 24), pullsDown: false)
+        displayPopup.target = self
+        displayPopup.action = #selector(displayChanged)
+        displayContainer.addSubview(displayPopup)
+
+        // Note about display change
+        let noteLabel = NSTextField(labelWithString: "Changing display will restart capture")
+        noteLabel.font = NSFont.systemFont(ofSize: 10)
+        noteLabel.textColor = .tertiaryLabelColor
+        noteLabel.frame = NSRect(x: 16, y: 20, width: 288, height: 14)
+        noteLabel.isHidden = true  // Will be shown when displayContainer is visible
+        noteLabel.tag = 999  // Tag to find it later
+        addSubview(noteLabel)
     }
 
     @objc private func closeClicked() {
